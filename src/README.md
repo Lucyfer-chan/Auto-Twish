@@ -1,4 +1,4 @@
-# Auto Twish — v 0.4.2
+# Auto Twish — v 0.5.0
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -213,7 +213,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.4.2 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.5.0 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -281,6 +281,9 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.5.0 (estável)** — a v 0.4.2 promovida a estável, junto com a variante
+  do Chrome. A partir daqui, Firefox e Chrome são desenvolvidos em paralelo,
+  com o mesmo número de versão.
 - **v 0.4.2** — Isca e reforços por evento, Torneio (entrada "pescar antes",
   isca, Turbo Torneio, Graxa de Molinete), isca no duelo; regras de CD em min:s.
 - **v 0.4.1** — Preparada para o Firefox normal: manifest declara
