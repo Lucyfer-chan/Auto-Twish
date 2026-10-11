@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.9
+# Auto Twish — v 0.3.10
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -171,7 +171,7 @@ Twitch precisa estar aberta.
 - **Proteção automática** (`$whitelist`): lista de espécies (padrão geral ou por
   canal). A whitelist do Twish é por barco; a extensão lê a whitelist de cada
   barco pela conta (`/api/{canal}/me/whitelist`) e manda `$whitelist <id>` só
-  para o que falta — ao mudar a lista, a cada 30 min e logo antes da Venda
+  para o que falta, na hora (sem o intervalo da fila) — ao mudar a lista, a cada 30 min e logo antes da Venda
   Turbinada. Só adiciona: tirar da lista não remove do jogo. Id recusado 2x
   pelo jogo deixa de ser enviado. Status e "Conferir agora" no cartão do canal.
 - Aviso opcional quando uma automação agir.
@@ -180,7 +180,7 @@ Twitch precisa estar aberta.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.9 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.10 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -248,6 +248,9 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.10** — Proteção sem atraso: `$whitelist` sai na hora (sem o
+  intervalo aleatório da fila); espécie adicionada durante uma conferência é
+  enviada logo em seguida; releitura de confirmação em 3 s.
 - **v 0.3.9** — Proteção automática (Road Map item 7) via `$whitelist`,
   conferida pela conta em cada barco; protege antes da Venda Turbinada.
 - **v 0.3.8** — Automações por evento (Road Map item 3, parte 1).

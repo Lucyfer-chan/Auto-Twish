@@ -623,11 +623,15 @@ const lastChatAt = new Map(); // canal -> horario do ultimo comando enviado
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function attemptSend(channel, text = FIXED_MESSAGE) {
+// gap: false = sem o intervalo aleatorio (ex: Protecao, que deve ser imediata).
+// Os comandos continuam saindo um por vez.
+function attemptSend(channel, text = FIXED_MESSAGE, { gap = true } = {}) {
   const run = chatChain.then(async () => {
-    const last = lastChatAt.get(channel) || 0;
-    const wait = last + CHAT_MIN_GAP_MS + Math.random() * CHAT_GAP_JITTER_MS - Date.now();
-    if (wait > 0) await sleep(wait);
+    if (gap) {
+      const last = lastChatAt.get(channel) || 0;
+      const wait = last + CHAT_MIN_GAP_MS + Math.random() * CHAT_GAP_JITTER_MS - Date.now();
+      if (wait > 0) await sleep(wait);
+    }
     const r = await sendChatNow(channel, text);
     if (r.ok) lastChatAt.set(channel, Date.now());
     return r;
@@ -637,10 +641,10 @@ function attemptSend(channel, text = FIXED_MESSAGE) {
 }
 
 // Comando de uma automacao: espera um pouco (reacao "humana") e entra na fila.
-async function enqueueCommand(channel, text, { delayMs = 0, reason = "" } = {}) {
+async function enqueueCommand(channel, text, { delayMs = 0, reason = "", gap = true } = {}) {
   if (delayMs > 0) await sleep(delayMs);
   if (safetyLocked) return { ok: false, reason: "verificacao-pendente" };
-  const r = await attemptSend(channel, text);
+  const r = await attemptSend(channel, text, { gap });
   console.log(`${AT.LOG_PREFIX} [fila] "${text}" em "${channel}"${reason ? ` (${reason})` : ""}: ${r.ok ? "enviado" : `falhou (${r.reason})`}.`);
   return r;
 }

@@ -13,9 +13,10 @@
 
 const PROTECT_ALARM_NAME = "auto-twish-protect";
 const PROTECT_INTERVAL_MINUTES = 30;
-const PROTECT_VERIFY_DELAY_MS = 6000; // espera o bot registrar antes de reler
+const PROTECT_VERIFY_DELAY_MS = 3000; // espera o bot registrar antes de reler (nao atrasa os envios)
 const PROTECT_MAX_FAILS = 2; // id que o jogo nao aceitou 2x seguidas para de ser enviado
 const protectingNow = new Set();
+const protectRerun = new Set(); // mudou a lista durante uma conferencia: confere de novo logo em seguida
 
 // Le a whitelist do barco pela conta. null = sem login/sem resposta.
 async function readGameWhitelist(channel) {
@@ -40,7 +41,10 @@ async function saveProtectionStatus(channel, patch) {
 
 // Confere um canal e manda o que falta. Devolve um resumo (ou null se pulou).
 async function syncProtection(channel, source) {
-  if (protectingNow.has(channel)) return null;
+  if (protectingNow.has(channel)) {
+    protectRerun.add(channel);
+    return null;
+  }
   protectingNow.add(channel);
   try {
     const cfg = await protectionConfigFor(channel);
@@ -67,15 +71,28 @@ async function syncProtection(channel, source) {
 
     const sent = [];
     for (const f of missing) {
-      const r = await enqueueCommand(channel, `${AT.WHITELIST_COMMAND} ${f.id}`, { reason: `Proteção (${source})` });
+      const r = await enqueueCommand(channel, `${AT.WHITELIST_COMMAND} ${f.id}`, { reason: `Proteção (${source})`, gap: false });
       if (!r.ok) break;
       sent.push(f.id);
     }
 
     let after = current;
     let localIds = prev.localIds || [];
+    // Espera o bot registrar antes de reler — mas, se a lista mudou nesse meio
+    // tempo, para de esperar: a nova conferencia sai na hora e rele tudo.
+    let interrupted = false;
     if (via === "api" && sent.length) {
-      await sleep(PROTECT_VERIFY_DELAY_MS);
+      for (let t = 0; t < PROTECT_VERIFY_DELAY_MS; t += 100) {
+        if (protectRerun.has(channel)) {
+          interrupted = true;
+          break;
+        }
+        await sleep(100);
+      }
+    }
+    if (interrupted) {
+      after = [...current, ...sent];
+    } else if (via === "api" && sent.length) {
       after = (await readGameWhitelist(channel)) || [...current, ...sent];
       for (const id of sent) {
         if (after.includes(id)) delete failed[id];
@@ -104,6 +121,9 @@ async function syncProtection(channel, source) {
     return { channel, sent, missing: stillMissing };
   } finally {
     protectingNow.delete(channel);
+    if (protectRerun.delete(channel)) {
+      syncProtection(channel, source).catch((e) => console.warn(`${AT.LOG_PREFIX} Falha na protecao de "${channel}":`, e));
+    }
   }
 }
 
