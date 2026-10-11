@@ -265,9 +265,22 @@ function computeJitterMs(settings) {
   return Math.floor(Math.random() * (maxJitterSeconds * 1000 + 1));
 }
 
-function computeDelayMs(settings) {
+// Mare Turbo (kind "cooldown_multiplier") reduz o CD da pesca pra value x o
+// normal enquanto dura. Guardado em memoria por canal, atualizado pela
+// consulta de eventos: { value, until }.
+const cooldownMultipliers = new Map();
+
+function cooldownMultiplierFor(channel) {
+  const m = channel && cooldownMultipliers.get(channel);
+  if (!m || m.until <= Date.now()) return 1;
+  return m.value > 0 && m.value <= 1 ? m.value : 1;
+}
+
+// Estimativa do proximo envio pela vara (+ atraso). Se houver Mare Turbo
+// ativa no canal, aplica o multiplicador ao tempo da vara.
+function computeDelayMs(settings, channel) {
   const baseMinutes = ROD_MINUTES[settings.rod] || ROD_MINUTES[DEFAULT_ROD];
-  const baseMs = baseMinutes * 60 * 1000;
+  const baseMs = baseMinutes * 60 * 1000 * cooldownMultiplierFor(channel);
   return baseMs + computeJitterMs(settings);
 }
 
@@ -654,7 +667,7 @@ async function applyChannelSettings(channel, patch) {
       } else if (twishFresh) {
         s.nextFireAt = Math.max(now, s.twishAvailableAt) + computeJitterMs(s);
       } else {
-        s.nextFireAt = now + computeDelayMs(s);
+        s.nextFireAt = now + computeDelayMs(s, channel);
       }
     }
 
@@ -696,7 +709,7 @@ async function recordSendResult(channel, ok) {
     if (!s || !s.enabled) return null;
     const now = Date.now();
     if (ok) {
-      s.nextFireAt = now + computeDelayMs({ ...DEFAULT_CHANNEL_SETTINGS, ...s });
+      s.nextFireAt = now + computeDelayMs({ ...DEFAULT_CHANNEL_SETTINGS, ...s }, channel);
       s.lastSentAt = now;
     } else {
       // Envio local falhou (aba nao encontrada, campo nao encontrado, etc).
@@ -810,7 +823,7 @@ async function recordUserSent(channel) {
     const now = Date.now();
     s.awaitingUser = false;
     s.lastSentAt = now;
-    s.nextFireAt = now + computeDelayMs({ ...DEFAULT_CHANNEL_SETTINGS, ...s });
+    s.nextFireAt = now + computeDelayMs({ ...DEFAULT_CHANNEL_SETTINGS, ...s }, channel);
     return s.nextFireAt;
   });
   if (nextFireAt === undefined) return;
@@ -866,6 +879,9 @@ function eventKeys(ev) {
 async function refreshEvents(channel, notify) {
   const ev = await fetchActiveEvents(channel);
   if (!ev) return null;
+  const turbo = ev.event && ev.event.kind === "cooldown_multiplier" ? ev.event : null;
+  if (turbo) cooldownMultipliers.set(channel, { value: Number(turbo.value), until: Date.now() + turbo.seconds_remaining * 1000 });
+  else cooldownMultipliers.delete(channel);
   const started = await mutateGameState(channel, (st) => {
     const oldKeys = eventKeys(st.events);
     // So guarda o que mudou de fato (o tempo restante muda a cada consulta).
@@ -948,10 +964,10 @@ async function onDuelInvite(channel, challenger, target, windowSeconds) {
   }
 }
 
-async function onDuelEnd(channel, winner, loser) {
+async function onDuelEnd(channel, mentions) {
   const general = await getGeneralSettings();
   const me = general.twishLogin;
-  if (!me || (winner.toLowerCase() !== me && loser.toLowerCase() !== me)) return; // duelo de outras pessoas
+  if (!me || !mentions.some((m) => m.toLowerCase() === me)) return; // duelo de outras pessoas
   const until = Date.now() + AT.DUEL_COOLDOWN_MS;
   await mutateGameState(channel, (st) => {
     st.duelCooldownUntil = until;
@@ -960,7 +976,7 @@ async function onDuelEnd(channel, winner, loser) {
   try {
     browser.notifications.clear(`duel:${channel}`);
   } catch (e) {}
-  console.log(`${AT.LOG_PREFIX} Duelo terminou em "${channel}" (${winner} venceu ${loser}); proximo duelo as ${new Date(until).toLocaleTimeString()}.`);
+  console.log(`${AT.LOG_PREFIX} Duelo terminou em "${channel}" (${mentions.join(", ")}); proximo duelo as ${new Date(until).toLocaleTimeString()}.`);
 }
 
 // O jogador mandou um comando que nao e o de pesca (ex: $aceitar, entrar em
@@ -1089,7 +1105,19 @@ async function clearLegacyAlarms() {
   }
 }
 
+// Ao acordar, recupera Mare Turbo ainda ativa a partir do ultimo estado salvo.
+async function restoreCooldownMultipliers() {
+  const { gameState } = await browser.storage.local.get("gameState");
+  for (const [channel, st] of Object.entries(gameState || {})) {
+    const ev = st && st.events && st.events.event;
+    if (!ev || ev.kind !== "cooldown_multiplier") continue;
+    const until = (st.events.fetchedAt || 0) + ev.seconds_remaining * 1000;
+    if (until > Date.now()) cooldownMultipliers.set(channel, { value: Number(ev.value), until });
+  }
+}
+
 async function bootstrap() {
+  await restoreCooldownMultipliers();
   await clearLegacyAlarms();
   await updateHeartbeat();
   await updateEventsPoller();
@@ -1183,7 +1211,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const channel = extractChannelFromUrl(sender?.tab?.url || "");
     if (!channel) return false;
     if (msg.type === "CHAT_FEATURED_FISH" && msg.fish) onFeaturedFish(channel, String(msg.fish).slice(0, 60));
-    if (msg.type === "CHAT_DUEL_END" && msg.winner && msg.loser) onDuelEnd(channel, String(msg.winner), String(msg.loser));
+    if (msg.type === "CHAT_DUEL_END" && Array.isArray(msg.mentions)) onDuelEnd(channel, msg.mentions.slice(0, 10).map(String));
     if (msg.type === "CHAT_DUEL_INVITE" && msg.challenger && msg.target) {
       onDuelInvite(channel, String(msg.challenger), String(msg.target), Math.max(1, Number(msg.windowSeconds) || 300));
     }

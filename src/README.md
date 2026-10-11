@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.2
+# Auto Twish — v 0.3.3
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -116,7 +116,7 @@ canal na Twitch aberta.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.2 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.3 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -184,6 +184,12 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.3** — ajustes da Fase 3.
+  - Fim de duelo reconhecido em vitória, derrota ou empate (qualquer mensagem
+    do TwishGameBot sobre duelo, com resultado, que te marque).
+  - Maré Turbo (`cooldown_multiplier`): além de zerar o CD ao começar, a
+    estimativa pelo tempo da vara passa a aplicar a redução do CD enquanto o
+    evento dura (vale no manual e quando a conta não pode ser lida).
 - **v 0.3.2** — Fase 3 do Road Map: leitura do jogo.
   - Sincronização pela conta do jogador (API `/api/<canal>/me`): cooldown e
     vara sem precisar da aba do canal; conferência antes e depois de enviar

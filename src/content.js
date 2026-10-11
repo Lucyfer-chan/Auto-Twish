@@ -223,7 +223,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Leitura do chat: so mensagens do TwishGameBot.
 //   - "Peixe em destaque: matrinxã. Pescou um? ..."            -> peixe em destaque
 //   - "@fulano desafiou @voce pra um duelo! @voce tem 5m0s ..." -> convite de duelo
-//   - "@a venceu o duelo [por W.O.] contra @b ..."              -> fim de duelo
+//   - "@a venceu o duelo [por W.O.] contra @b ..." (ou derrota/empate) -> fim de duelo
 // Observa so a lista de mensagens do chat (sem subarvore), entao o custo e
 // uma checagem curta por mensagem nova.
 // ---------------------------------------------------------------------------
@@ -232,7 +232,12 @@ const CHAT_CONTAINER_SELECTORS = [
   ".chat-scrollable-area__message-container"
 ];
 const FEATURED_RE = /Peixe em destaque:\s*([^.!?\n]+)/i;
-const DUEL_END_RE = /@(\w+)\s+venceu o duelo\b.*?contra\s+@(\w+)/i;
+// Fim de duelo: qualquer mensagem do bot sobre duelo com palavra de
+// resultado (vitoria, derrota ou empate) que nao seja um convite. O bot
+// sempre marca os participantes; o background confere se o jogador esta
+// entre os marcados.
+const DUEL_WORD_RE = /\bduelo\b/i;
+const DUEL_RESULT_RE = /\b(venceu|perdeu|empat\w*)\b/i;
 const DUEL_INVITE_RE = /@(\w+)\s+desafiou\s+@(\w+)\s+pra um duelo!.*?tem\s+(?:(\d+)m)?\s*(?:(\d+)s)?\s*pra usar\s+\$aceitar/i;
 
 function chatLineAuthor(node) {
@@ -257,9 +262,9 @@ function handleChatLine(node) {
     return;
   }
 
-  const ended = DUEL_END_RE.exec(text);
-  if (ended) {
-    browser.runtime.sendMessage({ type: "CHAT_DUEL_END", winner: ended[1], loser: ended[2] }).catch(() => {});
+  if (DUEL_WORD_RE.test(text) && DUEL_RESULT_RE.test(text) && !/desafiou/i.test(text)) {
+    const mentions = [...text.matchAll(/@(\w+)/g)].map((m) => m[1]);
+    browser.runtime.sendMessage({ type: "CHAT_DUEL_END", mentions }).catch(() => {});
     return;
   }
 
