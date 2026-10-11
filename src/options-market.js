@@ -99,7 +99,10 @@
       const got = entry.bought || 0;
       const done = qty !== null && got >= qty;
       const progress = document.createElement("div");
-      progress.textContent = qty !== null ? `Comprados ${got} de ${qty}${done ? " — concluído ✓" : ""}` : `Comprados ${got} (sem limite — até acabar as moedas)`;
+      const heldN = entry.held || 0;
+      progress.textContent =
+        (qty !== null ? `Comprados ${got} de ${qty}${done ? " — concluído ✓" : ""}` : `Comprados ${got} (sem limite — até acabar as moedas)`) +
+        (heldN ? ` · ${heldN} em análise` : "");
       if (done) progress.style.color = "var(--ok)";
       const crit = document.createElement("div");
       crit.textContent =
@@ -153,7 +156,7 @@
         reset.textContent = "Recomeçar";
         reset.title = "Zera a contagem de comprados";
         reset.addEventListener("click", async () => {
-          list[idx] = { ...list[idx], bought: 0 };
+          list[idx] = { ...list[idx], bought: 0, held: 0 };
           await save();
           renderList();
         });
@@ -289,7 +292,8 @@
       ul.className = "purchases";
       for (const p of st.purchases.slice(0, 8)) {
         const li = document.createElement("li");
-        li.textContent = `${new Date(p.at).toLocaleString()} — ${p.fish} ${p.weight} kg (${p.pct}%) por ${p.price} (de ${p.seller})`;
+        li.textContent = `${new Date(p.at).toLocaleString()} — ${p.fish} ${p.weight} kg (${p.pct}%) por ${p.price} (de ${p.seller})${p.held ? " — EM ANÁLISE (moedas reservadas)" : ""}`;
+        if (p.held) li.style.color = "var(--warn)";
         ul.appendChild(li);
       }
       statusEl.appendChild(ul);

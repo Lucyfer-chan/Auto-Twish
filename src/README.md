@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.6
+# Auto Twish — v 0.3.7
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -145,6 +145,9 @@ Na página de configurações, seção "Mercado". Desligada por padrão.
   próprios anúncios.
 - Barco usado nas compras: escolhível (o mercado é compartilhado, mas a
   compra passa pelo endereço de um canal).
+- Compra retida pelo site para análise da administração (moedas reservadas;
+  o peixe só chega se for aprovada): aparece como "em análise"; a extensão
+  para de comprar, desliga a aquisição e avisa. Religue quando quiser.
 - Sem saldo, avisa uma vez e continua ligada: volta a comprar quando houver
   saldo. Pausa com a trava de segurança.
 - "Verificar agora" com a aquisição desligada só **simula**: mostra o que
@@ -155,7 +158,7 @@ Na página de configurações, seção "Mercado". Desligada por padrão.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.6 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.7 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -223,6 +226,11 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.7** — Mercado: compras retidas para análise.
+  - O site pode responder `status: "held"` (compra retida pela
+    administração). Antes a extensão contava como compra concluída; agora
+    mostra "em análise", conta na quantidade, para de comprar, desliga a
+    aquisição e notifica.
 - **v 0.3.6** — Mercado: compra em quantidade.
   - Campo "Quantidade a comprar" (vazio = sem limite); contagem de comprados,
     "concluído" e "Recomeçar".

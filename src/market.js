@@ -100,13 +100,24 @@ function remainingOf(e) {
   return Math.max(0, e.quantity - (e.bought || 0));
 }
 
-// Soma uma compra no contador do item (gravado na propria lista).
-async function addBought(entryId) {
+// Soma uma compra no contador do item (gravado na propria lista). Compras
+// retidas pra analise tambem contam (as moedas ja ficam reservadas), e sao
+// contadas a parte em "held".
+async function addBought(entryId, held = false) {
   const list = await getAcquisitionList();
   const e = list.find((x) => x.id === entryId);
   if (!e) return;
   e.bought = (e.bought || 0) + 1;
+  if (held) e.held = (e.held || 0) + 1;
   await browser.storage.local.set({ acquisitionList: list });
+}
+
+// Desliga a aquisicao (usado quando uma compra e retida pra analise).
+async function pauseMarket() {
+  await mutateGeneral((g) => {
+    g.market = { ...g.market, enabled: false };
+  });
+  await browser.alarms.clear(AT.MARKET_ALARM_NAME);
 }
 
 // Saldo de twishcoins no barco das compras (pela conta). null = desconhecido.
@@ -213,6 +224,7 @@ async function marketCycle(source = "alarme") {
     const left = new Map(list.map((e) => [e.id, remainingOf(e)]));
     const bought = [];
     let skippedForCoins = 0;
+    let heldCount = 0;
     let stopReason = "";
     for (const c of candidates) {
       if ((left.get(c.entry.id) || 0) <= 0) continue;
@@ -232,15 +244,33 @@ async function marketCycle(source = "alarme") {
       });
 
       if (res.ok) {
-        bought.push(c);
+        // O site pode reter a compra pra analise da administracao
+        // (resposta { status: "held" }): moedas reservadas, peixe so chega
+        // se for aprovada.
+        const held = !!(res.data && res.data.status === "held");
         left.set(c.entry.id, left.get(c.entry.id) - 1);
         if (balance !== null) balance -= c.l.asking_price;
-        await addBought(c.entry.id);
-        const purchase = { at: Date.now(), fish: c.species.name, weight: c.l.weight, pct: c.pct, price: c.l.asking_price, seller: c.l.seller };
+        await addBought(c.entry.id, held);
+        const purchase = { at: Date.now(), fish: c.species.name, weight: c.l.weight, pct: c.pct, price: c.l.asking_price, seller: c.l.seller, held };
         await updateMarketState((st) => {
           st.purchases = [purchase, ...(st.purchases || [])].slice(0, MAX_RECENT_PURCHASES);
           st.outOfCoins = false;
         });
+        if (held) {
+          heldCount++;
+          console.warn(`${AT.LOG_PREFIX} Mercado: compra de ${c.species.name} por ${c.l.asking_price} RETIDA para análise.`);
+          stopReason = "compra retida para análise da administração — aquisição desligada";
+          await pauseMarket();
+          try {
+            await browser.notifications.create("market-held", {
+              type: "basic",
+              title: "Auto Twish — compra em análise",
+              message: `O Twish reteve a compra de ${c.species.name} (${c.l.asking_price} moedas reservadas) para análise da administração. A aquisição automática foi desligada; religue nas configurações quando quiser.`
+            });
+          } catch (e) {}
+          break;
+        }
+        bought.push(c);
         console.log(`${AT.LOG_PREFIX} Mercado: comprou ${c.species.name} ${c.l.weight} kg (${c.pct}%) por ${c.l.asking_price}.`);
       } else {
         const err = String((res.data && (res.data.error || res.data.message)) || `erro ${res.status || "de rede"}`);
@@ -278,7 +308,8 @@ async function marketCycle(source = "alarme") {
 
     const total = bought.reduce((s, c) => s + c.l.asking_price, 0);
     msg =
-      (bought.length ? `Comprou ${bought.length} peixe(s) por ${total} no total.` : "Nenhuma compra nesta verificação.") +
+      (bought.length ? `Comprou ${bought.length} peixe(s) por ${total} no total.` : heldCount ? "" : "Nenhuma compra nesta verificação.") +
+      (heldCount ? ` ${heldCount} compra(s) RETIDA(S) para análise (moedas reservadas).` : "") +
       (skippedForCoins ? ` ${skippedForCoins} anúncio(s) acima do saldo.` : "") +
       (stopReason ? ` Parou: ${stopReason}.` : "") +
       (balance !== null ? ` Saldo: ${balance}.` : "");
@@ -320,6 +351,7 @@ function sanitizeAcquisition(e) {
       return Number.isFinite(q) && q >= 1 ? q : null;
     })(),
     bought: Math.max(0, parseInt(e.bought, 10) || 0),
+    held: Math.max(0, parseInt(e.held, 10) || 0),
     enabled: !!e.enabled
   };
 }
