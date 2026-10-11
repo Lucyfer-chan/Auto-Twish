@@ -28,32 +28,25 @@ if (typeof importScripts === "function" && typeof browser === "undefined") {
   importScripts("browser-polyfill.js");
 }
 
-const FIXED_MESSAGE = "$pescar";
-const HEARTBEAT_NAME = "auto-twish-heartbeat";
-const DUE_ALARM_PREFIX = "auto-twish-due:";
+// Constantes compartilhadas (shared.js, carregado antes deste arquivo).
+const FIXED_MESSAGE = AT.FISH_COMMAND;
+const HEARTBEAT_NAME = AT.HEARTBEAT_NAME;
+const DUE_ALARM_PREFIX = AT.DUE_ALARM_PREFIX;
+const TWISH_URL_PATTERNS = AT.TWISH_URL_PATTERNS;
+const TWISH_DATA_FRESH_MS = AT.TWISH_DATA_FRESH_MS;
+const ROD_MINUTES = AT.ROD_MINUTES;
+const ROD_NAME_TO_ID = AT.ROD_NAME_TO_ID;
+const DEFAULT_ROD = AT.DEFAULT_ROD;
+const DEFAULT_CHANNEL_SETTINGS = AT.DEFAULT_CHANNEL_SETTINGS;
+const clampJitterSeconds = AT.clampJitterSeconds;
+
+// Constantes so do background.
 const RETRY_DELAY_MS = 15 * 1000; // se o envio local falhar, tenta de novo bem mais cedo
-const TWISH_URL_PATTERNS = ["*://twish.com.br/*", "*://*.twish.com.br/*"];
-const TWISH_DATA_FRESH_MS = 5 * 60 * 1000; // dado do Twish mais velho que isso e considerado obsoleto
 const SAME_COOLDOWN_TOLERANCE_MS = 3 * 1000; // leituras do titulo dentro dessa margem = mesmo cooldown, nao resorteia
 const JUST_SENT_GUARD_MS = 20 * 1000; // leituras "disponivel" ate 20s apos um envio nosso sao consideradas velhas
+const LAST_SEEN_PERSIST_MS = 60 * 1000; // durante o mesmo cooldown, grava o "visto por ultimo" no maximo 1x por minuto
 
-// Varas do jogo, da mais lenta (Bambu) pra mais rapida (Njord).
-const ROD_DEFS = [
-  { id: "vara_bambu", name: "Vara de Bambu", minutes: 10 },
-  { id: "vara_madeira", name: "Vara de Madeira Reforçada", minutes: 9 },
-  { id: "vara_fibra", name: "Vara de Fibra de Vidro", minutes: 8 },
-  { id: "vara_aco", name: "Vara de Aço", minutes: 7 },
-  { id: "vara_carbono", name: "Vara de Carbono", minutes: 6 },
-  { id: "vara_encantada", name: "Vara Encantada", minutes: 5 },
-  { id: "vara_abissal", name: "Vara Abissal", minutes: 4 },
-  { id: "vara_lendaria", name: "Vara Lendária", minutes: 3 },
-  { id: "vara_njord", name: "Vara Njord", minutes: 2 }
-];
-const ROD_MINUTES = Object.fromEntries(ROD_DEFS.map((r) => [r.id, r.minutes]));
-const ROD_NAME_TO_ID = Object.fromEntries(ROD_DEFS.map((r) => [r.name.toLowerCase(), r.id]));
-const DEFAULT_ROD = ROD_DEFS[0].id; // vara_bambu
-// Ids usados ate a v 0.1.1 (LSV) -> ids atuais. Canais salvos com o
-// formato antigo sao convertidos automaticamente na leitura.
+// Ids usados ate a v 0.1.1 (LSV) -> ids atuais (migrados uma vez, no carregamento).
 const LEGACY_ROD_IDS = {
   vara1: "vara_bambu", vara2: "vara_madeira", vara3: "vara_fibra",
   vara4: "vara_aco", vara5: "vara_carbono", vara6: "vara_encantada",
@@ -62,18 +55,6 @@ const LEGACY_ROD_IDS = {
 // Nomes de alarme usados antes da renomeacao pra "Auto Twish"; limpos no bootstrap.
 const LEGACY_HEARTBEAT_NAME = "twitch-auto-chat-heartbeat";
 const LEGACY_DUE_ALARM_PREFIX = "twitch-auto-chat-due:";
-const DEFAULT_MAX_JITTER_SECONDS = 10; // usado so se o canal nunca configurou o slider
-
-const DEFAULT_CHANNEL_SETTINGS = {
-  enabled: false,
-  rod: DEFAULT_ROD,
-  maxJitterSeconds: DEFAULT_MAX_JITTER_SECONDS, // atraso aleatorio extra vai de 0 ate esse valor
-  mode: "manual", // "manual" | "auto"
-  twishAvailableAt: null, // ultimo horario real de disponibilidade lido do Twish
-  twishLastSeen: null, // quando essa leitura foi feita
-  lastSentAt: null, // ultimo envio local bem-sucedido (guarda contra corrida com leituras velhas do Twish)
-  nextFireAt: null // timestamp (ms) da proxima tentativa; null = sem agendamento
-};
 
 // Lock em memoria: garante que so um envio por canal roda por vez, mesmo
 // se o alarme dedicado e o heartbeat dispararem quase simultaneamente.
@@ -85,13 +66,6 @@ function dueAlarmName(channel) {
 
 function channelFromDueAlarmName(name) {
   return name.startsWith(DUE_ALARM_PREFIX) ? name.slice(DUE_ALARM_PREFIX.length) : null;
-}
-
-// Garante um numero inteiro entre 1 e 100, com fallback pro default.
-function clampJitterSeconds(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return DEFAULT_MAX_JITTER_SECONDS;
-  return Math.min(100, Math.max(1, Math.round(n)));
 }
 
 // Extrai o nome do canal a partir da URL de uma aba da Twitch, cobrindo
@@ -159,46 +133,88 @@ function parseTwishTitle(title) {
   return null; // titulo em formato desconhecido; ignora
 }
 
-async function getAllChannelSettings() {
-  const { channels } = await browser.storage.local.get("channels");
-  const all = channels || {};
-  for (const settings of Object.values(all)) {
-    if (settings && LEGACY_ROD_IDS[settings.rod]) {
-      settings.rod = LEGACY_ROD_IDS[settings.rod];
-    }
+// ---------------------------------------------------------------------------
+// Armazenamento
+//
+// Formato (schema v2): { schemaVersion: 2, general: {...}, channels: {...} }.
+// O estado fica em cache na memoria: leituras nao tocam o disco, e so ha
+// gravacao quando algo realmente mudou. Antes, cada tick do titulo do Twish
+// (1x por segundo) fazia uma leitura e uma gravacao completas.
+// ---------------------------------------------------------------------------
+let stateCache = null; // { general, channels }
+let stateLoading = null;
+
+async function loadState() {
+  if (stateCache) return stateCache;
+  if (!stateLoading) {
+    stateLoading = (async () => {
+      const stored = await browser.storage.local.get(["schemaVersion", "general", "channels"]);
+      const channels = stored.channels || {};
+      const general = { ...AT.DEFAULT_GENERAL_SETTINGS, ...(stored.general || {}) };
+      let migrated = (stored.schemaVersion || 1) < AT.SCHEMA_VERSION;
+
+      for (const settings of Object.values(channels)) {
+        if (settings && LEGACY_ROD_IDS[settings.rod]) {
+          settings.rod = LEGACY_ROD_IDS[settings.rod];
+          migrated = true;
+        }
+      }
+
+      if (migrated) {
+        await browser.storage.local.set({ schemaVersion: AT.SCHEMA_VERSION, general, channels });
+        console.log(`${AT.LOG_PREFIX} Configuracoes migradas para o formato v${AT.SCHEMA_VERSION}.`);
+      }
+      stateCache = { general, channels };
+      return stateCache;
+    })().finally(() => {
+      stateLoading = null;
+    });
   }
-  return all;
+  return stateLoading;
+}
+
+// Se o armazenamento mudar por fora (ex: futura pagina de configuracoes
+// gravando direto), o cache acompanha. Gravacoes do proprio background ja
+// atualizam o cache antes, entao aqui nao muda nada nesse caso.
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !stateCache) return;
+  if (changes.channels) stateCache.channels = changes.channels.newValue || {};
+  if (changes.general) stateCache.general = { ...AT.DEFAULT_GENERAL_SETTINGS, ...(changes.general.newValue || {}) };
+});
+
+// Copia (pra ninguem alterar o cache sem passar pela fila de escrita).
+async function getAllChannelSettings() {
+  const state = await loadState();
+  return structuredClone(state.channels);
 }
 
 async function getChannelSettings(channel) {
-  const channels = await getAllChannelSettings();
-  return { ...DEFAULT_CHANNEL_SETTINGS, ...(channels[channel] || {}) };
-}
-
-async function saveAllChannelSettings(channels) {
-  await browser.storage.local.set({ channels });
+  const state = await loadState();
+  return { ...DEFAULT_CHANNEL_SETTINGS, ...structuredClone(state.channels[channel] || {}) };
 }
 
 // Fila unica de escrita: TODA alteracao das configuracoes dos canais passa
-// por aqui, uma de cada vez. Antes, varias rotinas (leitura do titulo do
-// Twish a cada ~1s, salvar no popup, envio terminando, etc.) faziam
-// "ler tudo -> alterar -> gravar tudo" ao mesmo tempo, e uma copia antiga
-// podia sobrescrever uma mais nova — por exemplo, desfazendo um
-// "desativar" recem-salvo (bug da reativacao sozinha no modo automatico).
+// por aqui, uma de cada vez (evita que uma copia antiga sobrescreva uma
+// mais nova — bug da reativacao sozinha, corrigido na v 0.1.4).
 let channelsWriteQueue = Promise.resolve();
 
-// Executa fn(channels) com acesso exclusivo; fn altera o objeto recebido e
-// o resultado e gravado no final. Devolve o que fn devolver.
+// Executa fn(channels) com acesso exclusivo; fn altera o objeto recebido.
+// So grava no disco se algo mudou. Devolve o que fn devolver.
 // Nunca chamar mutateChannels de dentro de outro mutateChannels (trava).
 function mutateChannels(fn) {
   const run = channelsWriteQueue.then(async () => {
-    const channels = await getAllChannelSettings();
-    const out = await fn(channels);
-    await saveAllChannelSettings(channels);
+    const state = await loadState();
+    const before = JSON.stringify(state.channels);
+    const working = structuredClone(state.channels);
+    const out = await fn(working);
+    if (JSON.stringify(working) !== before) {
+      state.channels = working;
+      await browser.storage.local.set({ channels: working });
+    }
     return out;
   });
   // A fila segue mesmo se esta operacao falhar.
-  channelsWriteQueue = run.catch((e) => console.warn("[Auto Twish] Falha ao gravar configuracoes:", e));
+  channelsWriteQueue = run.catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao gravar configuracoes:`, e));
   return run;
 }
 
@@ -213,11 +229,18 @@ function computeDelayMs(settings) {
   return baseMs + computeJitterMs(settings);
 }
 
-async function ensureHeartbeat() {
+// O heartbeat (rede de seguranca, 1x por minuto) so existe enquanto houver
+// pelo menos um canal ativado; sem nenhum, a extensao fica parada.
+async function updateHeartbeat() {
+  const channels = await getAllChannelSettings();
+  const anyEnabled = Object.values(channels).some((s) => s && s.enabled);
   const existing = await browser.alarms.get(HEARTBEAT_NAME);
-  if (!existing) {
+  if (anyEnabled && !existing) {
     await browser.alarms.create(HEARTBEAT_NAME, { periodInMinutes: 1 });
-    console.log("[Auto Twish] Heartbeat agendado (rede de seguranca, a cada 1 min).");
+    console.log(`${AT.LOG_PREFIX} Heartbeat ligado (rede de seguranca, a cada 1 min).`);
+  } else if (!anyEnabled && existing) {
+    await browser.alarms.clear(HEARTBEAT_NAME);
+    console.log(`${AT.LOG_PREFIX} Heartbeat desligado (nenhum canal ativado).`);
   }
 }
 
@@ -267,7 +290,7 @@ async function readEquippedRodInfoFromTab(tabId) {
     });
     return results?.[0]?.result || null;
   } catch (e) {
-    console.warn("[Auto Twish] Falha ao ler vara equipada na aba do Twish:", e);
+    console.warn(`${AT.LOG_PREFIX} Falha ao ler vara equipada na aba do Twish:`, e);
     return null;
   }
 }
@@ -313,11 +336,11 @@ async function syncTwishForChannel(channel) {
       if (availableAt !== null && rodId !== null) break;
     }
   } catch (e) {
-    console.warn("[Auto Twish] Falha ao sincronizar com abas do Twish:", e);
+    console.warn(`${AT.LOG_PREFIX} Falha ao sincronizar com abas do Twish:`, e);
   }
 
   console.log(
-    `[Auto Twish] Sincronizacao com o Twish ("${channel}"): ` +
+    `${AT.LOG_PREFIX} Sincronizacao com o Twish ("${channel}"): ` +
     (found
       ? `aba encontrada; ${availableAt === null ? "titulo nao reconhecido" : availableAt <= Date.now() + 1000 ? "pesca disponivel" : `disponivel as ${new Date(availableAt).toLocaleTimeString()}`}; vara ${rodId || "nao detectada"}`
       : "nenhuma aba do Twish aberta para esse canal")
@@ -344,13 +367,23 @@ async function recordTwishCooldown(channel, availableAt, explicit = false) {
     // igual de leitura pra leitura DENTRO do mesmo cooldown — so muda de
     // verdade quando um cooldown novo comeca. Nesse caso nao resorteia o
     // atraso a cada tick (o contador do popup "pularia" de valor).
+    const hasPrevious = previousAvailableAt !== null && previousAvailableAt !== undefined;
     const isSameCooldown =
-      previousAvailableAt !== null &&
-      previousAvailableAt !== undefined &&
-      Math.abs(availableAt - previousAvailableAt) < SAME_COOLDOWN_TOLERANCE_MS;
+      hasPrevious &&
+      (Math.abs(availableAt - previousAvailableAt) < SAME_COOLDOWN_TOLERANCE_MS ||
+        // "Disponivel agora" lido de novo, sem cooldown novo no meio: e o
+        // mesmo estado (antes, cada releitura resorteava o atraso e podia
+        // ficar empurrando o envio pra frente).
+        (previousAvailableAt <= now + SAME_COOLDOWN_TOLERANCE_MS && availableAt <= now + SAME_COOLDOWN_TOLERANCE_MS));
 
-    settings.twishAvailableAt = availableAt;
-    settings.twishLastSeen = now;
+    if (!isSameCooldown) {
+      settings.twishAvailableAt = availableAt;
+      settings.twishLastSeen = now;
+    } else if (!settings.twishLastSeen || now - settings.twishLastSeen >= LAST_SEEN_PERSIST_MS) {
+      // Mesmo cooldown: so atualiza o "visto por ultimo" de vez em quando
+      // (suficiente pra saber se o dado esta fresco; evita gravar 1x/s).
+      settings.twishLastSeen = now;
+    }
 
     if (!settings.enabled) return null;
     if (settings.mode !== "auto" && !explicit) return null; // manual so segue o Twish em sincronizacao explicita
@@ -373,7 +406,7 @@ async function recordTwishCooldown(channel, availableAt, explicit = false) {
 
   if (rescheduled) {
     await scheduleDueAlarm(channel, rescheduled);
-    console.log(`[Auto Twish] (Twish) "${channel}" cooldown real detectado; proximo envio as ${new Date(rescheduled).toLocaleTimeString()}`);
+    console.log(`${AT.LOG_PREFIX} (Twish) "${channel}" cooldown real detectado; proximo envio as ${new Date(rescheduled).toLocaleTimeString()}`);
   }
 }
 
@@ -393,7 +426,7 @@ async function syncAllTwishTabs() {
       await handleTwishTabUpdate(tab);
     }
   } catch (e) {
-    console.warn("[Auto Twish] Falha ao sincronizar abas do Twish na inicializacao:", e);
+    console.warn(`${AT.LOG_PREFIX} Falha ao sincronizar abas do Twish na inicializacao:`, e);
   }
 }
 
@@ -406,7 +439,7 @@ async function attemptSend(channel) {
   const targets = tabs.filter((t) => extractChannelFromUrl(t.url) === channel);
 
   if (targets.length === 0) {
-    console.warn(`[Auto Twish] Nenhuma aba aberta para "${channel}"; nao foi possivel enviar.`);
+    console.warn(`${AT.LOG_PREFIX} Nenhuma aba aberta para "${channel}"; nao foi possivel enviar.`);
     return { ok: false, reason: "no-tab" };
   }
 
@@ -423,12 +456,12 @@ async function attemptSend(channel) {
       }
     } catch (e) {
       reasons.push("no-content-script");
-      console.warn(`[Auto Twish] Falha ao enviar para a aba ${tab.id}:`, e);
+      console.warn(`${AT.LOG_PREFIX} Falha ao enviar para a aba ${tab.id}:`, e);
     }
   }
 
   if (!anyOk) {
-    console.warn(`[Auto Twish] Envio para "${channel}" falhou em todas as abas (${reasons.join(", ") || "sem detalhes"}).`);
+    console.warn(`${AT.LOG_PREFIX} Envio para "${channel}" falhou em todas as abas (${reasons.join(", ") || "sem detalhes"}).`);
   }
 
   return { ok: anyOk, reason: anyOk ? undefined : (reasons[0] || "unknown") };
@@ -491,10 +524,10 @@ async function applyChannelSettings(channel, formSettings) {
     return s;
   });
 
-  await ensureHeartbeat();
+  await updateHeartbeat();
   await scheduleDueAlarm(channel, settings.nextFireAt);
   console.log(
-    `[Auto Twish] Configuracao salva para "${channel}" (modo ${mode}):`,
+    `${AT.LOG_PREFIX} Configuracao salva para "${channel}" (modo ${mode}):`,
     settings,
     settings.nextFireAt ? `Proximo envio as ${new Date(settings.nextFireAt).toLocaleTimeString()}` : "(desativado)"
   );
@@ -528,7 +561,7 @@ async function recordSendResult(channel, ok) {
 // mesmo se os dois dispararem quase juntos, so um envio real aconteca.
 async function processChannelIfDue(channel, source) {
   if (inFlightChannels.has(channel)) {
-    console.log(`[Auto Twish] "${channel}" ja esta sendo processado; ignorando disparo duplicado vindo de "${source}".`);
+    console.log(`${AT.LOG_PREFIX} "${channel}" ja esta sendo processado; ignorando disparo duplicado vindo de "${source}".`);
     return;
   }
   inFlightChannels.add(channel);
@@ -543,12 +576,12 @@ async function processChannelIfDue(channel, source) {
     const nextFireAt = await recordSendResult(channel, result.ok);
 
     if (!result.ok) {
-      console.warn(`[Auto Twish] (${source}) Falha ao enviar para "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
+      console.warn(`${AT.LOG_PREFIX} (${source}) Falha ao enviar para "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
     }
     console.log(
       nextFireAt
-        ? `[Auto Twish] (${source}) Proximo envio para "${channel}" as ${new Date(nextFireAt).toLocaleTimeString()}`
-        : `[Auto Twish] (${source}) "${channel}" foi desativado durante o envio; nada reagendado.`
+        ? `${AT.LOG_PREFIX} (${source}) Proximo envio para "${channel}" as ${new Date(nextFireAt).toLocaleTimeString()}`
+        : `${AT.LOG_PREFIX} (${source}) "${channel}" foi desativado durante o envio; nada reagendado.`
     );
   } finally {
     inFlightChannels.delete(channel);
@@ -561,8 +594,10 @@ async function heartbeatTick() {
   // Rele os titulos das abas do Twish (barato: so uma consulta de abas).
   // Assim o modo automatico se corrige sozinho mesmo quando o titulo nao
   // muda — ex: TwishGameBot nao respondeu e a aba continua em "Twish".
-  await syncAllTwishTabs();
   const channels = await getAllChannelSettings();
+  if (Object.values(channels).some((s) => s && s.enabled && s.mode === "auto")) {
+    await syncAllTwishTabs();
+  }
   for (const [channel, settings] of Object.entries(channels)) {
     if (settings.enabled) {
       await processChannelIfDue(channel, "heartbeat");
@@ -582,13 +617,13 @@ async function clearLegacyAlarms() {
       }
     }
   } catch (e) {
-    console.warn("[Auto Twish] Falha ao limpar alarmes antigos:", e);
+    console.warn(`${AT.LOG_PREFIX} Falha ao limpar alarmes antigos:`, e);
   }
 }
 
 async function bootstrap() {
   await clearLegacyAlarms();
-  await ensureHeartbeat();
+  await updateHeartbeat();
   await restoreDueAlarms();
   await syncAllTwishTabs();
 }
@@ -667,9 +702,16 @@ browser.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-// Dispara sempre que o titulo de QUALQUER aba mudar; filtramos pelas
-// abas do Twish dentro do proprio handler.
-browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+// So acorda a extensao quando o TITULO de uma aba do Twish muda. Antes, o
+// listener recebia qualquer mudanca de qualquer aba do navegador (carregar,
+// icone, audio, titulo da Twitch...) e filtrava depois.
+function onTwishTabUpdated(tabId, changeInfo, tab) {
   if (changeInfo.title === undefined) return;
-  handleTwishTabUpdate(tab).catch((e) => console.warn("[Auto Twish] Falha ao processar titulo do Twish:", e));
-});
+  handleTwishTabUpdate(tab).catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao processar titulo do Twish:`, e));
+}
+try {
+  browser.tabs.onUpdated.addListener(onTwishTabUpdated, { urls: TWISH_URL_PATTERNS, properties: ["title"] });
+} catch (e) {
+  // Navegador sem suporte ao filtro: cai pro listener sem filtro.
+  browser.tabs.onUpdated.addListener(onTwishTabUpdated);
+}

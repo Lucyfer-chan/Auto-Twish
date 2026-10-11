@@ -11,13 +11,11 @@ const statusEl = document.getElementById("status");
 const countdownEl = document.getElementById("countdown");
 const checkingEl = document.getElementById("checking");
 
-// Precisa bater com HEARTBEAT_NAME e TWISH_DATA_FRESH_MS em background.js.
-const HEARTBEAT_NAME = "auto-twish-heartbeat";
-const DEFAULT_JITTER_SECONDS = 10;
-const DEFAULT_ROD = "vara_bambu";
-const TWISH_FRESH_MS = 5 * 60 * 1000;
-const REFRESH_INTERVAL_MS = 1000; // com que frequencia reconsulta os horarios reais
-const RENDER_INTERVAL_MS = 30; // com que frequencia so redesenha o texto (suave, com ms)
+// Constantes compartilhadas com o background (shared.js).
+const HEARTBEAT_NAME = AT.HEARTBEAT_NAME;
+const DEFAULT_JITTER_SECONDS = AT.DEFAULT_MAX_JITTER_SECONDS;
+const DEFAULT_ROD = AT.DEFAULT_ROD;
+const TWISH_FRESH_MS = AT.TWISH_DATA_FRESH_MS;
 
 // Mostra a versao (do manifest) no titulo do popup, no formato "v 0.XX.YYY".
 document.getElementById("version").textContent = `v ${browser.runtime.getManifest().version}`;
@@ -26,7 +24,6 @@ let currentChannel = null;
 let mainTarget = null; // nextFireAt do canal atual (ou null se desativado)
 let heartbeatTarget = null; // scheduledTime do alarme de heartbeat (ou null)
 let renderTimer = null;
-let refreshTimer = null;
 
 async function getActiveTabUrl() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
@@ -42,17 +39,7 @@ function setFormEnabled(isEnabled) {
   testBtn.disabled = !isEnabled;
 }
 
-function formatRemaining(ms) {
-  const clamped = Math.max(0, ms);
-  const minutes = Math.floor(clamped / 60000);
-  const seconds = Math.floor((clamped % 60000) / 1000);
-  const millis = Math.floor(clamped % 1000);
-  return (
-    String(minutes).padStart(2, "0") + ":" +
-    String(seconds).padStart(2, "0") + ":" +
-    String(millis).padStart(3, "0")
-  );
-}
+const formatRemaining = AT.formatRemaining; // "mm:ss", sem milissegundos
 
 let lastTwishSync = null; // resultado da ultima sincronizacao explicita ({ found, availableAt, rodId, at })
 
@@ -100,12 +87,8 @@ function renderTwishStatus(settings) {
 
 function stopTicking() {
   if (renderTimer) {
-    clearInterval(renderTimer);
+    clearTimeout(renderTimer);
     renderTimer = null;
-  }
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
   }
 }
 
@@ -138,7 +121,6 @@ async function syncTwish() {
 }
 
 // So redesenha o texto a partir dos valores em cache (mainTarget/heartbeatTarget).
-// Quem mantem esses valores atualizados de verdade e refreshTargets().
 function renderCountdowns() {
   if (!mainTarget) {
     countdownEl.className = "muted";
@@ -151,41 +133,23 @@ function renderCountdowns() {
   const remaining = mainTarget - Date.now();
 
   if (remaining > 0) {
-    // Cooldown ainda rodando: a checagem do sistema ainda nao importa pra
-    // esse canal, entao fica escondida.
     countdownEl.textContent = `Próximo envio em: ${formatRemaining(remaining)}`;
     checkingEl.textContent = "";
     return;
   }
 
-  // Cooldown esgotado: o alarme dedicado do canal dispara quase
-  // instantaneamente nesse momento. Esse texto deve aparecer so por um
-  // instante breve, ate o proximo refreshTargets() confirmar o novo envio.
+  // Cooldown esgotado: o alarme dedicado do canal dispara quase na hora;
+  // esse texto aparece so por um instante, ate o envio ser registrado.
   countdownEl.textContent = "Próximo envio: agora…";
-  if (heartbeatTarget) {
-    const remainingCheck = Math.max(0, heartbeatTarget - Date.now());
-    checkingEl.textContent = `Rede de segurança (fallback) em: ${formatRemaining(remainingCheck)}`;
+  if (heartbeatTarget && heartbeatTarget > Date.now()) {
+    checkingEl.textContent = `Rede de segurança (fallback) em: ${formatRemaining(heartbeatTarget - Date.now())}`;
   } else {
     checkingEl.textContent = "";
+    refreshHeartbeatTarget(); // horario do heartbeat ja passou; busca o proximo
   }
 }
 
-// Busca os horarios reais (storage + alarme) de novo. E isso que faz os
-// contadores se recuperarem sozinhos depois que o heartbeat dispara ou
-// reagenda algo, sem precisar fechar e reabrir o popup.
-async function refreshTargets() {
-  if (!currentChannel) return;
-
-  try {
-    const { settings } = await browser.runtime.sendMessage({
-      type: "GET_CHANNEL_SETTINGS",
-      channel: currentChannel
-    });
-    mainTarget = settings && settings.enabled ? settings.nextFireAt : null;
-  } catch (e) {
-    // falha pontual de mensageria; tenta de novo no proximo ciclo
-  }
-
+async function refreshHeartbeatTarget() {
   try {
     const alarm = await browser.alarms.get(HEARTBEAT_NAME);
     heartbeatTarget = alarm ? alarm.scheduledTime : null;
@@ -194,15 +158,25 @@ async function refreshTargets() {
   }
 }
 
+// Redesenha 1x por segundo, alinhado na virada do segundo do contador.
 function startTicking() {
   stopTicking();
-  renderCountdowns();
-  renderTimer = setInterval(renderCountdowns, RENDER_INTERVAL_MS);
-  refreshTimer = setInterval(async () => {
-    await refreshTargets();
+  const tick = () => {
     renderCountdowns();
-  }, REFRESH_INTERVAL_MS);
+    const msToNextSecond = mainTarget ? ((mainTarget - Date.now()) % 1000 + 1000) % 1000 || 1000 : 1000;
+    renderTimer = setTimeout(tick, msToNextSecond + 5);
+  };
+  tick();
 }
+
+// Em vez de perguntar ao background a cada segundo, o popup e avisado
+// quando as configuracoes mudam (envio feito, reagendamento, etc.).
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.channels || !currentChannel) return;
+  const s = (changes.channels.newValue || {})[currentChannel];
+  mainTarget = s && s.enabled ? s.nextFireAt : null;
+  renderCountdowns();
+});
 
 jitterEl.addEventListener("input", () => {
   jitterValueEl.textContent = `${jitterEl.value}s`;
@@ -243,7 +217,7 @@ async function load() {
   renderTwishStatus(settings);
 
   mainTarget = settings.enabled ? settings.nextFireAt : null;
-  await refreshTargets(); // ja busca o heartbeat mais recente antes do 1o desenho
+  await refreshHeartbeatTarget();
   startTicking();
 
   // Busca dado fresco do Twish assim que o popup abre, em vez de esperar

@@ -1,4 +1,4 @@
-# Auto Twish — v 0.2.0 (estável)
+# Auto Twish — v 0.2.1
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -96,7 +96,7 @@ aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.2.0 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.2.1 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -153,10 +153,10 @@ aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
    exemplo, se o navegador estivesse totalmente fechado naquele instante).
 9. O popup mostra dois contadores, que se atualizam sozinhos (não precisa
    fechar e reabrir):
-   - "Próximo envio em: MM:SS:mmm" — tempo restante até a tentativa deste
+   - "Próximo envio em: MM:SS" — tempo restante até a tentativa deste
      canal (vara + atraso aleatório, ou horário real do Twish no modo
      automático).
-   - "Rede de segurança (fallback) em: MM:SS:mmm" — só aparece depois que
+   - "Rede de segurança (fallback) em: MM:SS" — só aparece depois que
      o contador acima chega a zero, e mostra quanto falta pro heartbeat
      rodar de novo *caso* o alarme dedicado não tenha disparado sozinho.
      Na maioria das vezes o envio já sai antes disso, então essa linha
@@ -189,6 +189,20 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.2.1** — otimização de CPU (Fase 1 do Road Map). Mesmo comportamento
+  da 0.2.0, com bem menos trabalho em segundo plano.
+  - A extensão só é acordada quando muda o título de uma aba do Twish (antes,
+    qualquer mudança em qualquer aba do navegador a acordava).
+  - Configurações ficam em cache na memória e só são gravadas quando algo
+    muda: em 2 min de contagem regressiva do Twish, de 120 gravações para 1.
+  - A checagem de 1 em 1 minuto só existe enquanto houver canal ativado.
+  - Popup: contador em `mm:ss` (sem milissegundos), redesenhado 1x por
+    segundo, e avisado quando algo muda em vez de consultar a cada segundo.
+  - Novo formato das configurações (Gerais + Por canal), com migração
+    automática — base da futura página de configurações.
+  - Constantes compartilhadas entre popup e background em `shared.js`.
+  - Corrigido: com a pesca disponível no modo automático, cada checagem de
+    1 min sorteava um atraso novo e podia empurrar o envio para frente.
 - **v 0.2.0 (estável)** — a v 0.1.5 promovida a versão estável, sem mudanças
   de código. Reúne tudo da v 0.1.2 até a v 0.1.5.
 - **v 0.1.5** — sincronização com o Twish em qualquer modo.
