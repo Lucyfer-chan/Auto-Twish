@@ -1,4 +1,4 @@
-# Auto Twish — v 0.1.5
+# Auto Twish — v 0.2.0 (estável)
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -96,7 +96,7 @@ aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.1.5 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.2.0 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -189,6 +189,8 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.2.0 (estável)** — a v 0.1.5 promovida a versão estável, sem mudanças
+  de código. Reúne tudo da v 0.1.2 até a v 0.1.5.
 - **v 0.1.5** — sincronização com o Twish em qualquer modo.
   - Abrir o popup, trocar o modo e salvar agora sincronizam com a aba do Twish
     em qualquer modo, ativada ou não (antes, na prática, só ao salvar no
