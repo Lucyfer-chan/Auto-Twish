@@ -66,6 +66,36 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function fieldText(el) {
+  return (el.innerText || el.textContent || "").trim();
+}
+
+// Coloca o texto no campo do chat SUBSTITUINDO o que houver.
+// 1) Evento "beforeinput" (insertText): e o que o editor da Twitch (Slate)
+//    escuta para atualizar o proprio modelo. No Chrome, o execCommand mexia
+//    so na tela: o texto aparecia, mas o modelo do editor ficava vazio e o
+//    envio nao saia (relato do jogador na v 0.5.1).
+// 2) Se o editor nao reagir, cai no metodo antigo (execCommand), que
+//    funcionava no Firefox.
+async function insertChatText(input, text) {
+  selectAllWithin(input);
+  await wait(60); // o Slate atualiza a selecao dele no "selectionchange"
+  input.dispatchEvent(
+    new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true, composed: true })
+  );
+  for (let i = 0; i < 6; i++) {
+    await wait(50);
+    if (fieldText(input) === text) return "beforeinput";
+  }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    selectAllWithin(input);
+    document.execCommand("insertText", false, text);
+    if (fieldText(input) === text) return "execCommand";
+    await wait(120);
+  }
+  return null;
+}
+
 // Digita o texto e confirma que ele REALMENTE ficou no campo antes de
 // disparar o envio. Retorna { ok: true } so quando tudo foi confirmado
 // localmente — isso NAO garante que o TwishGameBot respondeu, so que a
@@ -97,20 +127,10 @@ async function typeAndSend(text) {
     // o campo vazio mesmo com o insertText tendo retornado sucesso.
     await wait(80);
 
-    // Tenta inserir o texto algumas vezes rapidamente antes de desistir —
-    // bem mais rapido que esperar o retry externo (15s) do background.js.
+    const how = await insertChatText(input, text);
+    console.debug(`[Auto Twish] texto inserido via ${how || "nenhum metodo"}.`);
+    const actualText = fieldText(input);
     const INSERT_ATTEMPTS = 3;
-    let actualText = "";
-    for (let attempt = 1; attempt <= INSERT_ATTEMPTS; attempt++) {
-      selectAllWithin(input);
-      document.execCommand("insertText", false, text);
-      actualText = (input.innerText || input.textContent || "").trim();
-      if (actualText === text) break;
-      if (attempt < INSERT_ATTEMPTS) {
-        console.warn(`[Auto Twish] Tentativa ${attempt}/${INSERT_ATTEMPTS} de inserir texto nao confirmada (campo contem "${actualText}"); tentando de novo.`);
-        await wait(120);
-      }
-    }
 
     // Confirma que o texto ficou EXATAMENTE certo antes de mandar. Isso
     // pega tanto falhas silenciosas do insertText quanto qualquer sobra de
@@ -161,12 +181,7 @@ async function typeOnly(text) {
 
   focusEditor(input);
   await wait(80);
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    selectAllWithin(input);
-    document.execCommand("insertText", false, text);
-    if ((input.innerText || input.textContent || "").trim() === text) return { ok: true, typed: true };
-    await wait(120);
-  }
+  if (await insertChatText(input, text)) return { ok: true, typed: true };
   return { ok: false, reason: "insert-mismatch" };
 }
 
