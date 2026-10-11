@@ -1,4 +1,4 @@
-# Auto Twish — v 0.1.3
+# Auto Twish — v 0.1.4
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -68,9 +68,15 @@ vara manualmente se a aba do Twish estiver aberta.
 
 **Disparo imediato ao ativar**: se, no instante em que você marca "Ativado"
 e salva, o Twish já mostrar a pesca disponível (sem cooldown pendente), a
-extensão dispara o primeiro `$pescar` na hora, sem esperar o atraso
-aleatório — esse atraso só entra pra disfarçar o ritmo dos envios
-*seguintes*, recorrentes.
+extensão dispara o primeiro `$pescar` na hora — **em qualquer modo**, manual
+ou automático — sem esperar o atraso aleatório (esse atraso só entra pra
+disfarçar o ritmo dos envios *seguintes*). No modo manual o dado do Twish só
+é usado nesse primeiro disparo; depois segue a estimativa da vara.
+
+**Autocorreção**: no modo automático, se o agendamento estiver mais tarde do
+que o cooldown real permite (ex: o TwishGameBot não respondeu ao último
+`$pescar` e a aba continua mostrando "Twish"), a extensão corrige sozinha —
+ao abrir o popup, ao salvar ou na checagem de 1 em 1 minuto.
 
 Para usar o modo automático: abra, na mesma janela ou em outra aba, a
 página do Twish daquele canal (ex: a página de inventário) — a extensão
@@ -83,7 +89,7 @@ aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.1.3 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.1.4 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -176,6 +182,18 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.1.4** — correção dos bugs da lista de implementações em andamento.
+  - Corrigido: no modo automático, a extensão se reativava sozinha quando o CD
+    zerava, mesmo depois de desativada. Causa: várias rotinas gravavam a
+    configuração ao mesmo tempo e uma cópia antiga sobrescrevia o "desativado".
+    Agora toda gravação passa por uma fila única, e um envio em andamento não
+    reativa um canal desativado durante ele.
+  - Corrigido: ao abrir o popup com o CD já zerado, o contador ficava no tempo
+    da vara (ex: 10 min) em vez de pescar. Agora o agendamento é corrigido
+    sempre que estiver mais tarde do que o cooldown real permite.
+  - Disparo imediato ao ativar também no modo manual (se a aba do Twish
+    mostrar a pesca disponível).
+  - A checagem de 1 em 1 minuto também relê o título da aba do Twish.
 - **v 0.1.3** — ID interno da extensão trocado de `twitch-auto-chat@local.extension`
   para `auto-twish@local.extension`. O Firefox trata como uma extensão nova:
   as configurações salvas dos canais não são herdadas e precisam ser feitas de

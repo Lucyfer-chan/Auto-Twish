@@ -35,6 +35,7 @@ const RETRY_DELAY_MS = 15 * 1000; // se o envio local falhar, tenta de novo bem 
 const TWISH_URL_PATTERNS = ["*://twish.com.br/*", "*://*.twish.com.br/*"];
 const TWISH_DATA_FRESH_MS = 5 * 60 * 1000; // dado do Twish mais velho que isso e considerado obsoleto
 const SAME_COOLDOWN_TOLERANCE_MS = 3 * 1000; // leituras do titulo dentro dessa margem = mesmo cooldown, nao resorteia
+const JUST_SENT_GUARD_MS = 20 * 1000; // leituras "disponivel" ate 20s apos um envio nosso sao consideradas velhas
 
 // Varas do jogo, da mais lenta (Bambu) pra mais rapida (Njord).
 const ROD_DEFS = [
@@ -178,6 +179,29 @@ async function saveAllChannelSettings(channels) {
   await browser.storage.local.set({ channels });
 }
 
+// Fila unica de escrita: TODA alteracao das configuracoes dos canais passa
+// por aqui, uma de cada vez. Antes, varias rotinas (leitura do titulo do
+// Twish a cada ~1s, salvar no popup, envio terminando, etc.) faziam
+// "ler tudo -> alterar -> gravar tudo" ao mesmo tempo, e uma copia antiga
+// podia sobrescrever uma mais nova — por exemplo, desfazendo um
+// "desativar" recem-salvo (bug da reativacao sozinha no modo automatico).
+let channelsWriteQueue = Promise.resolve();
+
+// Executa fn(channels) com acesso exclusivo; fn altera o objeto recebido e
+// o resultado e gravado no final. Devolve o que fn devolver.
+// Nunca chamar mutateChannels de dentro de outro mutateChannels (trava).
+function mutateChannels(fn) {
+  const run = channelsWriteQueue.then(async () => {
+    const channels = await getAllChannelSettings();
+    const out = await fn(channels);
+    await saveAllChannelSettings(channels);
+    return out;
+  });
+  // A fila segue mesmo se esta operacao falhar.
+  channelsWriteQueue = run.catch((e) => console.warn("[Auto Twish] Falha ao gravar configuracoes:", e));
+  return run;
+}
+
 function computeJitterMs(settings) {
   const maxJitterSeconds = clampJitterSeconds(settings.maxJitterSeconds);
   return Math.floor(Math.random() * (maxJitterSeconds * 1000 + 1));
@@ -296,53 +320,50 @@ async function syncTwishForChannel(channel) {
 // Registra uma leitura de cooldown do Twish para um canal e, se esse canal
 // estiver ativado em modo automatico, corrige nextFireAt com o horario
 // real (+ o atraso configurado). Ignora leituras "disponivel agora" que
-// cheguem logo apos um envio nosso (guarda contra evento atrasado/antigo
-// re-disparando o canal por engano).
+// cheguem logo apos um envio nosso (o titulo ainda nao foi atualizado pelo
+// TwishGameBot, entao a leitura e velha).
 async function recordTwishCooldown(channel, availableAt) {
-  const channels = await getAllChannelSettings();
-  const settings = channels[channel];
-  if (!settings) return; // canal ainda nao configurado na extensao
+  const rescheduled = await mutateChannels((channels) => {
+    const settings = channels[channel];
+    if (!settings) return null; // canal ainda nao configurado na extensao
 
-  const now = Date.now();
-  const previousAvailableAt = settings.twishAvailableAt;
-  // A aba do Twish atualiza o titulo a cada ~1s (contagem regressiva), entao
-  // availableAt (um timestamp absoluto = agora + restante) fica praticamente
-  // igual de leitura pra leitura DENTRO do mesmo cooldown — so muda de
-  // verdade quando um cooldown novo comeca. Sem essa checagem, cada tick
-  // do titulo resorteava um atraso aleatorio novo, fazendo o contador do
-  // popup "pular" de valor a cada segundo.
-  const isSameCooldown =
-    previousAvailableAt !== null &&
-    previousAvailableAt !== undefined &&
-    Math.abs(availableAt - previousAvailableAt) < SAME_COOLDOWN_TOLERANCE_MS;
+    const now = Date.now();
+    const previousAvailableAt = settings.twishAvailableAt;
+    // A aba do Twish atualiza o titulo a cada ~1s (contagem regressiva), entao
+    // availableAt (um timestamp absoluto = agora + restante) fica praticamente
+    // igual de leitura pra leitura DENTRO do mesmo cooldown — so muda de
+    // verdade quando um cooldown novo comeca. Nesse caso nao resorteia o
+    // atraso a cada tick (o contador do popup "pularia" de valor).
+    const isSameCooldown =
+      previousAvailableAt !== null &&
+      previousAvailableAt !== undefined &&
+      Math.abs(availableAt - previousAvailableAt) < SAME_COOLDOWN_TOLERANCE_MS;
 
-  settings.twishAvailableAt = availableAt;
-  settings.twishLastSeen = now;
+    settings.twishAvailableAt = availableAt;
+    settings.twishLastSeen = now;
 
-  if (isSameCooldown) {
-    // Mesmo cooldown de antes — so atualiza o "visto por ultimo" (freshness),
-    // nao mexe em nextFireAt nem resorteia o atraso.
-    channels[channel] = settings;
-    await saveAllChannelSettings(channels);
-    return;
-  }
+    if (!settings.enabled || settings.mode !== "auto") return null;
 
-  if (settings.enabled && settings.mode === "auto") {
-    const justSent = settings.lastSentAt && (now - settings.lastSentAt < 5000);
+    const justSent = settings.lastSentAt && now - settings.lastSentAt < JUST_SENT_GUARD_MS;
     const isFreshCooldown = availableAt > now + 3000;
+    if (justSent && !isFreshCooldown) return null; // leitura velha logo apos um envio nosso
 
-    if (!justSent || isFreshCooldown) {
-      settings.nextFireAt = Math.max(now, availableAt) + computeJitterMs(settings);
-      channels[channel] = settings;
-      await saveAllChannelSettings(channels);
-      await scheduleDueAlarm(channel, settings.nextFireAt);
-      console.log(`[Auto Twish] (Twish) "${channel}" cooldown real detectado; proximo envio as ${new Date(settings.nextFireAt).toLocaleTimeString()}`);
-      return;
-    }
+    // Mesmo no "mesmo cooldown", corrige o agendamento se ele estiver mais
+    // tarde do que o cooldown real permite (ex: estimativa de 10 min da vara
+    // depois de um envio que o TwishGameBot nao respondeu, ou agendamento
+    // feito antes da aba do Twish ser aberta).
+    const latestAcceptable = Math.max(now, availableAt) + clampJitterSeconds(settings.maxJitterSeconds) * 1000 + 2000;
+    const scheduleIsWrong = !settings.nextFireAt || settings.nextFireAt > latestAcceptable;
+    if (isSameCooldown && !scheduleIsWrong) return null;
+
+    settings.nextFireAt = Math.max(now, availableAt) + computeJitterMs(settings);
+    return settings.nextFireAt;
+  });
+
+  if (rescheduled) {
+    await scheduleDueAlarm(channel, rescheduled);
+    console.log(`[Auto Twish] (Twish) "${channel}" cooldown real detectado; proximo envio as ${new Date(rescheduled).toLocaleTimeString()}`);
   }
-
-  channels[channel] = settings;
-  await saveAllChannelSettings(channels);
 }
 
 async function handleTwishTabUpdate(tab) {
@@ -403,59 +424,61 @@ async function attemptSend(channel) {
 }
 
 async function applyChannelSettings(channel, formSettings) {
-  const channels = await getAllChannelSettings();
-  const previous = channels[channel] || {};
   const enabled = !!formSettings.enabled;
   const mode = formSettings.mode === "auto" ? "auto" : "manual";
-  const isActivating = enabled && !previous.enabled; // transicao desativado -> ativado
 
-  const settings = {
-    enabled,
-    rod: formSettings.rod || DEFAULT_ROD,
-    maxJitterSeconds: clampJitterSeconds(formSettings.maxJitterSeconds),
-    mode,
-    twishAvailableAt: previous.twishAvailableAt || null,
-    twishLastSeen: previous.twishLastSeen || null,
-    lastSentAt: previous.lastSentAt || null,
-    nextFireAt: null
-  };
+  // Busca dado fresco do Twish (cooldown real E vara equipada) ANTES de
+  // entrar na fila de escrita — a leitura da pagina pode demorar e nao
+  // deve segurar as outras gravacoes.
+  const twish = enabled ? await syncTwishForChannel(channel) : { availableAt: null, rodId: null };
 
-  let twishFresh = false;
-  if (enabled) {
-    // Busca um dado fresco na hora de salvar — cooldown real E vara
-    // equipada — em vez de confiar so no cache ou esperar a proxima
-    // mudanca de titulo da aba.
-    const { availableAt, rodId } = await syncTwishForChannel(channel);
-    if (availableAt !== null) {
-      settings.twishAvailableAt = availableAt;
-      settings.twishLastSeen = Date.now();
+  const settings = await mutateChannels((channels) => {
+    const previous = channels[channel] || {};
+    const isActivating = enabled && !previous.enabled; // transicao desativado -> ativado
+    const now = Date.now();
+
+    const s = {
+      enabled,
+      rod: formSettings.rod || DEFAULT_ROD,
+      maxJitterSeconds: clampJitterSeconds(formSettings.maxJitterSeconds),
+      mode,
+      twishAvailableAt: previous.twishAvailableAt || null,
+      twishLastSeen: previous.twishLastSeen || null,
+      lastSentAt: previous.lastSentAt || null,
+      nextFireAt: null
+    };
+
+    if (enabled) {
+      if (twish.availableAt !== null) {
+        s.twishAvailableAt = twish.availableAt;
+        s.twishLastSeen = now;
+      }
+      if (twish.rodId) {
+        s.rod = twish.rodId; // vara equipada detectada tem prioridade sobre a selecao manual
+      }
+
+      const twishFresh =
+        s.twishAvailableAt !== null && s.twishLastSeen && now - s.twishLastSeen < TWISH_DATA_FRESH_MS;
+      const availableNow = twishFresh && s.twishAvailableAt <= now + 1000;
+
+      if (isActivating && availableNow) {
+        // Acabou de ativar e o Twish mostra a pesca disponivel: dispara ja,
+        // em qualquer modo, sem somar o atraso aleatorio (ele existe pra
+        // disfarcar o ritmo dos envios recorrentes, nao o primeiro).
+        s.nextFireAt = now;
+      } else if (twishFresh && (mode === "auto" || isActivating)) {
+        // Automatico sempre segue o Twish; no manual, o dado real so e usado
+        // no momento de ativar (depois segue so a estimativa da vara).
+        s.nextFireAt = Math.max(now, s.twishAvailableAt) + computeJitterMs(s);
+      } else {
+        s.nextFireAt = now + computeDelayMs(s);
+      }
     }
-    if (rodId) {
-      settings.rod = rodId; // vara equipada detectada tem prioridade sobre a selecao manual
-    }
 
-    twishFresh =
-      mode === "auto" &&
-      settings.twishAvailableAt !== null &&
-      settings.twishLastSeen &&
-      Date.now() - settings.twishLastSeen < TWISH_DATA_FRESH_MS;
+    channels[channel] = s;
+    return s;
+  });
 
-    const availableNow = twishFresh && settings.twishAvailableAt <= Date.now() + 1000;
-
-    if (isActivating && availableNow) {
-      // Acabou de ativar e nao ha cooldown pendente: dispara ja, sem
-      // somar o atraso aleatorio (esse existe pra disfarcar o ritmo dos
-      // envios recorrentes, nao faz sentido no primeiro disparo).
-      settings.nextFireAt = Date.now();
-    } else if (twishFresh) {
-      settings.nextFireAt = Math.max(Date.now(), settings.twishAvailableAt) + computeJitterMs(settings);
-    } else {
-      settings.nextFireAt = Date.now() + computeDelayMs(settings);
-    }
-  }
-
-  channels[channel] = settings;
-  await saveAllChannelSettings(channels);
   await ensureHeartbeat();
   await scheduleDueAlarm(channel, settings.nextFireAt);
   console.log(
@@ -464,6 +487,28 @@ async function applyChannelSettings(channel, formSettings) {
     settings.nextFireAt ? `Proximo envio as ${new Date(settings.nextFireAt).toLocaleTimeString()}` : "(desativado)"
   );
   return settings;
+}
+
+// Grava o resultado de um envio (feito FORA da fila de escrita, porque
+// digitar no chat leva alguns segundos). Rele a configuracao atual: se o
+// canal foi desativado durante o envio, nao reagenda nada.
+async function recordSendResult(channel, ok) {
+  const nextFireAt = await mutateChannels((channels) => {
+    const s = channels[channel];
+    if (!s || !s.enabled) return null;
+    const now = Date.now();
+    if (ok) {
+      s.nextFireAt = now + computeDelayMs({ ...DEFAULT_CHANNEL_SETTINGS, ...s });
+      s.lastSentAt = now;
+    } else {
+      // Envio local falhou (aba nao encontrada, campo nao encontrado, etc).
+      // Nao avanca o cooldown normal — tenta de novo logo.
+      s.nextFireAt = now + RETRY_DELAY_MS;
+    }
+    return s.nextFireAt;
+  });
+  await scheduleDueAlarm(channel, nextFireAt);
+  return nextFireAt;
 }
 
 // Ponto unico de disparo, usado tanto pelo alarme dedicado quanto pelo
@@ -477,29 +522,22 @@ async function processChannelIfDue(channel, source) {
   inFlightChannels.add(channel);
 
   try {
-    const channels = await getAllChannelSettings();
-    const settings = channels[channel];
+    const settings = (await getAllChannelSettings())[channel];
     if (!settings || !settings.enabled) return;
 
-    const now = Date.now();
-    if (settings.nextFireAt && now < settings.nextFireAt) return; // ainda nao esta na hora
+    if (settings.nextFireAt && Date.now() < settings.nextFireAt) return; // ainda nao esta na hora
 
     const result = await attemptSend(channel);
+    const nextFireAt = await recordSendResult(channel, result.ok);
 
-    if (result.ok) {
-      settings.nextFireAt = Date.now() + computeDelayMs(settings);
-      settings.lastSentAt = Date.now();
-    } else {
-      // Envio local falhou (aba nao encontrada, campo nao encontrado, etc).
-      // Nao avanca o cooldown normal — tenta de novo logo.
-      settings.nextFireAt = Date.now() + RETRY_DELAY_MS;
+    if (!result.ok) {
       console.warn(`[Auto Twish] (${source}) Falha ao enviar para "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
     }
-
-    channels[channel] = settings;
-    await saveAllChannelSettings(channels);
-    await scheduleDueAlarm(channel, settings.nextFireAt);
-    console.log(`[Auto Twish] (${source}) Proximo envio para "${channel}" as ${new Date(settings.nextFireAt).toLocaleTimeString()}`);
+    console.log(
+      nextFireAt
+        ? `[Auto Twish] (${source}) Proximo envio para "${channel}" as ${new Date(nextFireAt).toLocaleTimeString()}`
+        : `[Auto Twish] (${source}) "${channel}" foi desativado durante o envio; nada reagendado.`
+    );
   } finally {
     inFlightChannels.delete(channel);
   }
@@ -508,6 +546,10 @@ async function processChannelIfDue(channel, source) {
 // Rede de seguranca: varre todos os canais ativos a cada 1 min. So deve
 // realmente disparar algo se o alarme dedicado correspondente tiver falhado.
 async function heartbeatTick() {
+  // Rele os titulos das abas do Twish (barato: so uma consulta de abas).
+  // Assim o modo automatico se corrige sozinho mesmo quando o titulo nao
+  // muda — ex: TwishGameBot nao respondeu e a aba continua em "Twish".
+  await syncAllTwishTabs();
   const channels = await getAllChannelSettings();
   for (const [channel, settings] of Object.entries(channels)) {
     if (settings.enabled) {
@@ -575,20 +617,15 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const { availableAt, rodId } = await syncTwishForChannel(channel);
 
       if (availableAt !== null) {
-        // Reaproveita a mesma logica de recordTwishCooldown (respeita o
-        // guard de "mesmo cooldown" e o de "acabou de enviar"), entao o
-        // popup abrindo nao desconfigura um agendamento correto.
+        // Mesma logica do titulo mudando (respeita "mesmo cooldown" e
+        // "acabou de enviar"), mas tambem corrige agendamento errado.
         await recordTwishCooldown(channel, availableAt);
       }
 
       if (rodId) {
-        const channels = await getAllChannelSettings();
-        const s = channels[channel];
-        if (s && s.rod !== rodId) {
-          s.rod = rodId;
-          channels[channel] = s;
-          await saveAllChannelSettings(channels);
-        }
+        await mutateChannels((channels) => {
+          if (channels[channel]) channels[channel].rod = rodId;
+        });
       }
 
       sendResponse({ settings: await getChannelSettings(channel) });
@@ -604,21 +641,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "SEND_NOW") {
     (async () => {
       const result = await attemptSend(msg.channel);
-      const channels = await getAllChannelSettings();
-      const settings = { ...DEFAULT_CHANNEL_SETTINGS, ...(channels[msg.channel] || {}) };
-      if (settings.enabled) {
-        const now = Date.now();
-        if (result.ok) {
-          settings.nextFireAt = now + computeDelayMs(settings);
-          settings.lastSentAt = now;
-        } else {
-          settings.nextFireAt = now + RETRY_DELAY_MS;
-        }
-        channels[msg.channel] = settings;
-        await saveAllChannelSettings(channels);
-        await scheduleDueAlarm(msg.channel, settings.nextFireAt);
-      }
-      sendResponse({ ok: result.ok, reason: result.reason, settings });
+      await recordSendResult(msg.channel, result.ok); // so reagenda se o canal estiver ativado
+      sendResponse({ ok: result.ok, reason: result.reason, settings: await getChannelSettings(msg.channel) });
     })();
     return true;
   }
