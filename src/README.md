@@ -1,4 +1,4 @@
-# Auto Twish — v 0.2.1
+# Auto Twish — v 0.2.2
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -50,7 +50,7 @@ Cada canal pode rodar em um de dois modos, escolhidos no popup:
 - **Automático**: além da estimativa da vara (que continua servindo de
   reserva), a extensão observa o **título** de qualquer aba aberta do site
   do Twish (`twish.com.br/c/<canal>/<usuário>/...`) — formato `"(mm:ss)
-  Twish"` durante o cooldown, ou só `"Twish"` quando a pesca está
+  Twish"` durante o cooldown, ou `"🎣 Twish"` quando a pesca está
   disponível — e usa esse horário real pra corrigir o próximo envio sempre
   que a leitura for mais recente e mais cedo que a estimativa. Sem uma aba
   do Twish daquele canal aberta (ou com leitura antiga, +5 min), o modo
@@ -96,7 +96,7 @@ aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.2.1 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.2.2 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -189,6 +189,13 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.2.2** — corrigida a leitura do título da aba do Twish.
+  - Com o CD zerado, o título real é `🎣 Twish` (com emote), e a extensão só
+    aceitava `Twish` puro. Por isso ela não pescava na hora ao ativar e não
+    percebia o CD zerado ao abrir o popup nem no modo automático. Agora
+    aceita emotes, símbolos ou espaços antes do texto, nos dois formatos.
+  - O log mostra o título exato quando ele não é reconhecido.
+  - Popup: título não reconhecido aparece como aviso, não como "sincronizado".
 - **v 0.2.1** — otimização de CPU (Fase 1 do Road Map). Mesmo comportamento
   da 0.2.0, com bem menos trabalho em segundo plano.
   - A extensão só é acordada quando muda o título de uma aba do Twish (antes,

@@ -113,20 +113,27 @@ function extractChannelFromTwishUrl(url) {
   }
 }
 
-// Interpreta o titulo da aba do Twish: "(mm:ss) Twish" quando em cooldown,
-// ou "Twish" quando a pesca ja esta disponivel.
+// Interpreta o titulo da aba do Twish:
+//   "(mm:ss) Twish" -> em cooldown
+//   "🎣 Twish"      -> pesca disponivel (o site poe um emote antes do nome)
+// Aceita qualquer simbolo/emote/espaco antes de cada parte, pra nao
+// quebrar se o site mudar o enfeite.
+const TWISH_PREFIX = "[^\\p{L}\\p{N}(]*"; // tudo que nao for letra, numero ou "("
+const TWISH_COOLDOWN_RE = new RegExp(`^${TWISH_PREFIX}\\((\\d{1,3}):(\\d{2})\\)${TWISH_PREFIX}Twish(?![\\p{L}\\p{N}])`, "iu");
+const TWISH_READY_RE = new RegExp(`^${TWISH_PREFIX}Twish(?![\\p{L}\\p{N}])`, "iu");
+
 function parseTwishTitle(title) {
   if (!title) return null;
   const trimmed = title.trim();
 
-  const withCooldown = /^\((\d{1,3}):(\d{2})\)\s*Twish\b/i.exec(trimmed);
+  const withCooldown = TWISH_COOLDOWN_RE.exec(trimmed);
   if (withCooldown) {
     const minutes = parseInt(withCooldown[1], 10);
     const seconds = parseInt(withCooldown[2], 10);
     return { availableNow: false, remainingMs: (minutes * 60 + seconds) * 1000 };
   }
 
-  if (/^Twish\b/i.test(trimmed)) {
+  if (TWISH_READY_RE.test(trimmed)) {
     return { availableNow: true, remainingMs: 0 };
   }
 
@@ -314,6 +321,7 @@ async function syncTwishForChannel(channel) {
   let availableAt = null;
   let rodId = null;
   let found = false; // achou alguma aba do Twish desse canal?
+  let rawTitle = null; // titulo lido (pro log, quando nao reconhecido)
 
   try {
     const tabs = await browser.tabs.query({ url: TWISH_URL_PATTERNS });
@@ -322,7 +330,8 @@ async function syncTwishForChannel(channel) {
       found = true;
 
       if (availableAt === null) {
-        const parsed = parseTwishTitle(tab.title || "");
+        rawTitle = tab.title || "";
+        const parsed = parseTwishTitle(rawTitle);
         if (parsed) {
           availableAt = parsed.availableNow ? Date.now() : Date.now() + parsed.remainingMs;
         }
@@ -342,7 +351,7 @@ async function syncTwishForChannel(channel) {
   console.log(
     `${AT.LOG_PREFIX} Sincronizacao com o Twish ("${channel}"): ` +
     (found
-      ? `aba encontrada; ${availableAt === null ? "titulo nao reconhecido" : availableAt <= Date.now() + 1000 ? "pesca disponivel" : `disponivel as ${new Date(availableAt).toLocaleTimeString()}`}; vara ${rodId || "nao detectada"}`
+      ? `aba encontrada; ${availableAt === null ? `titulo nao reconhecido (${JSON.stringify(rawTitle)})` : availableAt <= Date.now() + 1000 ? "pesca disponivel" : `disponivel as ${new Date(availableAt).toLocaleTimeString()}`}; vara ${rodId || "nao detectada"}`
       : "nenhuma aba do Twish aberta para esse canal")
   );
   return { found, availableAt, rodId };

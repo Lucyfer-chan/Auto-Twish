@@ -62,8 +62,14 @@ function renderTwishStatus(settings) {
       what = `cooldown de ${formatClock(sync.availableAt - sync.at)} no momento da leitura`;
     }
     const rod = sync.rodId ? "vara detectada" : "vara não detectada";
-    twishStatusEl.textContent = `Twish: sincronizado — ${what}; ${rod}.`;
-    twishStatusEl.className = "hint ok";
+    if (sync.availableAt === null) {
+      // Achou a aba mas nao entendeu o titulo: avisa (nao e sincronizacao de verdade).
+      twishStatusEl.textContent = `Twish: ${what} — usando a estimativa da vara; ${rod}.`;
+      twishStatusEl.className = "hint stale";
+    } else {
+      twishStatusEl.textContent = `Twish: sincronizado — ${what}; ${rod}.`;
+      twishStatusEl.className = "hint ok";
+    }
     return;
   }
 
