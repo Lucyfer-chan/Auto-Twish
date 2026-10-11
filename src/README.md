@@ -1,4 +1,4 @@
-# Auto Twish — v 0.5.2
+# Auto Twish — v 0.5.3
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -213,7 +213,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.5.2 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.5.3 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -281,6 +281,12 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.5.3** — Chrome: o envio continuava falhando na 0.5.2. Causa real: no
+  Chrome o content script roda num mundo isolado, e o editor do chat da Twitch
+  não aceita eventos vindos de lá. Agora, no Chrome, digitar e enviar rodam
+  dentro da página (`scripting.executeScript` com `world: "MAIN"`); o content
+  script fica de reserva. Firefox inalterado. Testado na Twitch real (mensagem
+  enviada com autorização do jogador).
 - **v 0.5.2** — Chrome: a extensão digitava no chat mas não enviava (o texto
   aparecia por cima de "Envie uma mensagem", mas o editor da Twitch continuava
   vazio). Agora o texto é inserido pelo evento `beforeinput`, que o editor da

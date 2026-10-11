@@ -654,6 +654,103 @@ async function enqueueCommand(channel, text, { delayMs = 0, reason = "", gap = t
   return r;
 }
 
+// ---------------------------------------------------------------------------
+// Chrome: digitar/enviar DENTRO da pagina (mundo "MAIN").
+// No Chrome, eventos disparados pelo content script (mundo isolado) nao sao
+// aceitos pelo editor do chat da Twitch (Slate): o texto aparece na tela mas
+// o editor continua vazio e o envio nao sai. A mesma rotina, executada no
+// mundo da pagina, funciona (testado na Twitch real, v 0.5.3). O Firefox
+// continua usando o content script, que la funciona.
+// A funcao abaixo e serializada e roda na pagina: nao pode usar nada de fora.
+// ---------------------------------------------------------------------------
+function pageChatAction(text, sendIt) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const fieldText = (el) => (el.innerText || el.textContent || "").trim();
+  const findInput = () => {
+    for (const sel of [
+      '[data-a-target="chat-input"] [contenteditable="true"]',
+      '.chat-wysiwyg-input__editor[contenteditable="true"]',
+      'div[role="textbox"][contenteditable="true"]'
+    ]) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+    return null;
+  };
+  const selectAll = (el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+  return (async () => {
+    if (window.__autoTwishBusy) return { ok: false, reason: "already-sending" };
+    window.__autoTwishBusy = true;
+    try {
+      const input = findInput();
+      if (!input) return { ok: false, reason: "input-not-found" };
+      if (!sendIt) {
+        const cur = fieldText(input);
+        if (cur === text) return { ok: true, typed: true };
+        if (cur !== "") return { ok: true, typed: false }; // rascunho do jogador: nao mexe
+      }
+      for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+        input.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+      }
+      input.focus();
+      await wait(80);
+      selectAll(input);
+      await wait(60);
+      input.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true, composed: true }));
+      let ok = false;
+      for (let i = 0; i < 8 && !ok; i++) {
+        await wait(50);
+        ok = fieldText(input) === text;
+      }
+      if (!ok) {
+        selectAll(input);
+        document.execCommand("insertText", false, text);
+        ok = fieldText(input) === text;
+      }
+      if (!ok) return { ok: false, reason: "insert-mismatch" };
+      if (!sendIt) return { ok: true, typed: true };
+      await wait(150);
+      const btn = document.querySelector('[data-a-target="chat-send-button"]');
+      if (btn && !btn.disabled) btn.click();
+      else {
+        for (const type of ["keydown", "keypress", "keyup"]) {
+          input.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+        }
+      }
+      await wait(300);
+      if (fieldText(input) === text) return { ok: false, reason: "send-not-confirmed" };
+      return { ok: true };
+    } finally {
+      window.__autoTwishBusy = false;
+    }
+  })();
+}
+
+// Envia (SEND_CHAT_MESSAGE) ou so digita (TYPE_CHAT_MESSAGE) numa aba.
+async function chatInTab(tabId, type, text) {
+  if (AT.browserName() === "Chrome") {
+    try {
+      const res = await browser.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: pageChatAction,
+        args: [text, type === "SEND_CHAT_MESSAGE"]
+      });
+      const r = res && res[0] && res[0].result;
+      if (r) return r;
+    } catch (e) {
+      console.warn(`${AT.LOG_PREFIX} Falha ao digitar pela pagina; tentando pelo content script:`, e);
+    }
+  }
+  return browser.tabs.sendMessage(tabId, { type, text });
+}
+
 // Tenta enviar a mensagem pra(s) aba(s) do canal e reporta se o
 // content.js confirmou que o texto foi digitado e o envio foi disparado.
 // NAO confirma que o TwishGameBot de fato respondeu — so que o envio
@@ -673,7 +770,7 @@ async function sendChatNow(channel, text) {
 
   for (const tab of targets) {
     try {
-      const result = await browser.tabs.sendMessage(tab.id, { type: "SEND_CHAT_MESSAGE", text });
+      const result = await chatInTab(tab.id, "SEND_CHAT_MESSAGE", text);
       if (result?.ok) {
         anyOk = true;
       } else {
@@ -863,7 +960,7 @@ async function attemptType(channel) {
   let lastReason = "unknown";
   for (const tab of targets) {
     try {
-      const result = await browser.tabs.sendMessage(tab.id, { type: "TYPE_CHAT_MESSAGE", text: FIXED_MESSAGE });
+      const result = await chatInTab(tab.id, "TYPE_CHAT_MESSAGE", FIXED_MESSAGE);
       if (result?.ok) return { ok: true, tab, typed: !!result.typed };
       lastReason = result?.reason || "unknown";
     } catch (e) {
