@@ -95,11 +95,19 @@
       const name = document.createElement("strong");
       name.textContent = entry.fishName || entry.fishId || "(sem peixe)";
       text.append(name, f ? `  ${speciesInfo(f)}` : "");
+      const qty = Number.isFinite(entry.quantity) && entry.quantity >= 1 ? entry.quantity : null;
+      const got = entry.bought || 0;
+      const done = qty !== null && got >= qty;
+      const progress = document.createElement("div");
+      progress.textContent = qty !== null ? `Comprados ${got} de ${qty}${done ? " — concluído ✓" : ""}` : `Comprados ${got} (sem limite — até acabar as moedas)`;
+      if (done) progress.style.color = "var(--ok)";
       const crit = document.createElement("div");
       crit.textContent =
         `Peso ≥ ${fmt(entry.minKg)} kg · até ${fmt(entry.maxPrice)} · ` +
         `abaixo de 95%: até ${fmt(entry.maxPriceBelow95)} com % ≥ ${fmt(entry.minPct)}`;
       text.appendChild(crit);
+      text.appendChild(progress);
+      if (done) card.classList.add("off");
       if (!AT.isValidAcquisition(entry)) {
         const warn = document.createElement("div");
         warn.style.color = "var(--warn)";
@@ -137,7 +145,22 @@
         renderList();
       });
 
-      row.append(text, activeLabel, edit, remove);
+      const extra = [];
+      if (got > 0) {
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "btn secondary acq-remove";
+        reset.textContent = "Recomeçar";
+        reset.title = "Zera a contagem de comprados";
+        reset.addEventListener("click", async () => {
+          list[idx] = { ...list[idx], bought: 0 };
+          await save();
+          renderList();
+        });
+        extra.push(reset);
+      }
+
+      row.append(text, activeLabel, edit, ...extra, remove);
       card.appendChild(row);
       listEl.appendChild(card);
     });
@@ -152,6 +175,7 @@
   const fMaxPrice = el("f-maxPrice");
   const fMaxBelow = el("f-maxBelow");
   const fEnabled = el("f-enabled");
+  const fQuantity = el("f-quantity");
   const fError = el("acqFormError");
   let editingIndex = null; // null = adicionando
 
@@ -173,7 +197,8 @@
     fMaxPrice.value = e && Number.isFinite(e.maxPrice) ? fmt(e.maxPrice) : "";
     fMaxBelow.value = e && Number.isFinite(e.maxPriceBelow95) ? fmt(e.maxPriceBelow95) : "";
     fEnabled.checked = e ? !!e.enabled : true;
-    for (const i of [fFish, fMinKg, fMinPct, fMaxPrice, fMaxBelow]) i.classList.remove("invalid");
+    fQuantity.value = e && Number.isFinite(e.quantity) && e.quantity >= 1 ? String(e.quantity) : "";
+    for (const i of [fFish, fMinKg, fMinPct, fMaxPrice, fMaxBelow, fQuantity]) i.classList.remove("invalid");
     fError.textContent = "";
     updateFishHint();
     form.hidden = false;
@@ -209,6 +234,11 @@
       fMinPct.classList.add("invalid");
       problems.push("% mínima acima de 100");
     }
+    const qText = fQuantity.value.trim();
+    const quantity = qText === "" ? null : Number(qText);
+    const badQty = quantity !== null && !(Number.isInteger(quantity) && quantity >= 1);
+    fQuantity.classList.toggle("invalid", badQty);
+    if (badQty) problems.push("quantidade (número inteiro, 1 ou mais, ou vazio)");
     if (problems.length) {
       fError.textContent = `Confira: ${problems.join(", ")}. Use números (vírgula ou ponto).`;
       return;
@@ -219,6 +249,7 @@
       fishId: f.id,
       fishName: f.name,
       ...values,
+      quantity,
       enabled: fEnabled.checked
     };
     if (editingIndex === null) list.push(entry);
@@ -328,6 +359,10 @@
   browser.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     if (changes.marketState) renderStatus(changes.marketState.newValue);
+    if (changes.acquisitionList) {
+      list = changes.acquisitionList.newValue || [];
+      renderList();
+    }
     if (changes.safety) renderSafety();
     if (changes.general) {
       const g = AT.mergeGeneral(changes.general.newValue);

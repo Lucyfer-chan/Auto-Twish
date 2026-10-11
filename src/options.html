@@ -307,7 +307,7 @@
       <span class="setting-title">Comprar automaticamente os peixes da lista</span>
       <input type="checkbox" id="marketEnabled" class="switch" />
     </label>
-    <div class="hint">Consulta os anúncios do Mercado pela API do site (com o seu login no twish.com.br) e compra no máximo um anúncio por verificação, o mais barato que passar nos critérios. Desliga sozinho com saldo insuficiente.</div>
+    <div class="hint">Consulta os anúncios do Mercado pela API do site (com o seu login no twish.com.br) e, a cada verificação, compra todos os anúncios dentro dos critérios — do mais barato para o mais caro — até completar a quantidade de cada peixe ou acabar o saldo de twishcoins do barco escolhido. Sem saldo, espera e volta a comprar quando houver.</div>
 
     <div class="channel-grid" style="margin-top:6px">
       <div>
@@ -361,6 +361,13 @@
           <label for="f-maxBelow">Valor máx. abaixo de 95%</label>
           <input id="f-maxBelow" type="text" inputmode="decimal" autocomplete="off" placeholder="ex: 200" />
           <div class="field-hint">teto quando a % é menor que 95</div>
+        </div>
+      </div>
+      <div class="acq-fields">
+        <div class="acq-field">
+          <label for="f-quantity">Quantidade a comprar</label>
+          <input id="f-quantity" type="text" inputmode="numeric" autocomplete="off" placeholder="vazio = sem limite" />
+          <div class="field-hint">para ao comprar essa quantidade; vazio = até acabar as moedas</div>
         </div>
       </div>
       <label class="check-row">

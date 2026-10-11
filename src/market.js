@@ -83,7 +83,7 @@ async function fetchListings(boat, species, maxPrice) {
 async function scheduleMarket({ soon = false } = {}) {
   const { market } = await getGeneralSettings();
   const list = await getAcquisitionList();
-  const active = market.enabled && list.some((e) => e.enabled && AT.isValidAcquisition(e));
+  const active = market.enabled && list.some((e) => e.enabled && AT.isValidAcquisition(e) && remainingOf(e) > 0);
   if (!active) {
     await browser.alarms.clear(AT.MARKET_ALARM_NAME);
     return;
@@ -93,18 +93,42 @@ async function scheduleMarket({ soon = false } = {}) {
   await browser.alarms.create(AT.MARKET_ALARM_NAME, { when: Date.now() + delay });
 }
 
-async function disableMarket(reason) {
-  await mutateGeneral((g) => {
-    g.market = { ...g.market, enabled: false };
-  });
-  await browser.alarms.clear(AT.MARKET_ALARM_NAME);
-  await updateMarketState((st) => {
-    st.lastMsg = reason;
+
+// Quantos ainda faltam comprar deste item (Infinity = sem limite).
+function remainingOf(e) {
+  if (e.quantity === null || e.quantity === undefined) return Infinity;
+  return Math.max(0, e.quantity - (e.bought || 0));
+}
+
+// Soma uma compra no contador do item (gravado na propria lista).
+async function addBought(entryId) {
+  const list = await getAcquisitionList();
+  const e = list.find((x) => x.id === entryId);
+  if (!e) return;
+  e.bought = (e.bought || 0) + 1;
+  await browser.storage.local.set({ acquisitionList: list });
+}
+
+// Saldo de twishcoins no barco das compras (pela conta). null = desconhecido.
+async function marketBalance(boat) {
+  const me = await fetchTwishMe(boat);
+  const coins = me && me.data && me.data.twishcoins;
+  return typeof coins === "number" ? coins : null;
+}
+
+async function notifyOutOfCoins(balance) {
+  const st = await getMarketState();
+  if (st.outOfCoins) return; // ja avisou nesta sequencia
+  await updateMarketState((s) => {
+    s.outOfCoins = true;
   });
   try {
-    await browser.notifications.create("market-off", { type: "basic", title: "Auto Twish — Mercado", message: reason });
+    await browser.notifications.create("market-coins", {
+      type: "basic",
+      title: "Auto Twish — Mercado",
+      message: `Moedas insuficientes para os anúncios encontrados${balance !== null ? ` (saldo: ${balance})` : ""}. As compras voltam quando houver saldo.`
+    });
   } catch (e) {}
-  console.warn(`${AT.LOG_PREFIX} Mercado: ${reason}`);
 }
 
 async function marketCycle(source = "alarme") {
@@ -129,27 +153,32 @@ async function marketCycle(source = "alarme") {
       return;
     }
 
-    const list = (await getAcquisitionList()).filter((e) => e.enabled && AT.isValidAcquisition(e));
+    const all = await getAcquisitionList();
+    const list = all.filter((e) => e.enabled && AT.isValidAcquisition(e) && remainingOf(e) > 0);
     if (!list.length) {
-      msg = "Lista de aquisição vazia ou sem itens ativos.";
+      const done = all.some((e) => e.enabled && AT.isValidAcquisition(e) && remainingOf(e) <= 0);
+      msg = done ? "Todos os peixes ativos já atingiram a quantidade pedida." : "Lista de aquisição vazia ou sem itens ativos.";
       return;
     }
 
     const best = await getBestiary(boat);
     const me = (general.twishLogin || "").toLowerCase();
+
+    // Candidatos por item, ja limitados ao que falta comprar dele.
     const candidates = [];
     for (const entry of list) {
       const species = best.byId[entry.fishId];
       if (!species) continue;
       const listings = await fetchListings(boat, species, entry.maxPrice);
-      if (listings) {
-        for (const l of listings) {
-          if (l.fish_id !== entry.fishId || l.item_id) continue;
-          if (me && String(l.seller || "").toLowerCase() === me) continue; // anuncio do proprio jogador
-          const pct = AT.marketPct(l.weight, species.max_kg);
-          if (AT.shouldBuy(entry, { weight: l.weight, pct, price: l.asking_price })) candidates.push({ entry, l, pct, species });
-        }
+      const mine = [];
+      for (const l of listings || []) {
+        if (l.fish_id !== entry.fishId || l.item_id) continue;
+        if (me && String(l.seller || "").toLowerCase() === me) continue; // anuncio do proprio jogador
+        const pct = AT.marketPct(l.weight, species.max_kg);
+        if (AT.shouldBuy(entry, { weight: l.weight, pct, price: l.asking_price })) mine.push({ entry, l, pct, species });
       }
+      mine.sort((a, b) => a.l.asking_price - b.l.asking_price || b.pct - a.pct);
+      candidates.push(...mine.slice(0, remainingOf(entry) === Infinity ? mine.length : remainingOf(entry)));
       await sleepMs(300 + Math.random() * 500); // espaca as consultas
     }
 
@@ -158,48 +187,101 @@ async function marketCycle(source = "alarme") {
       return;
     }
 
-    // Mais barato primeiro; empate -> maior %.
+    // Do mais barato pro mais caro (empate -> maior %).
     candidates.sort((a, b) => a.l.asking_price - b.l.asking_price || b.pct - a.pct);
-    const { l, pct, species } = candidates[0];
+    let balance = await marketBalance(boat);
+
     if (dryRun) {
-      msg = `Simulação (aquisição desligada): compraria ${species.name} ${l.weight} kg (${pct}%) por ${l.asking_price}` +
-        (candidates.length > 1 ? ` — ${candidates.length} anúncios dentro dos critérios.` : ".");
-      return;
-    }
-    const res = await twishApi(`/api/${encodeURIComponent(boat)}/market/listings/${encodeURIComponent(l.id)}/buy`, {
-      method: "POST",
-      body: {}
-    });
-
-    if (res.ok) {
-      const purchase = { at: Date.now(), fish: species.name, weight: l.weight, pct, price: l.asking_price, seller: l.seller };
-      await updateMarketState((st) => {
-        st.purchases = [purchase, ...(st.purchases || [])].slice(0, MAX_RECENT_PURCHASES);
-      });
-      msg = `Comprou ${species.name} ${l.weight} kg (${pct}%) por ${l.asking_price}.`;
-      console.log(`${AT.LOG_PREFIX} Mercado: ${msg}`);
-      if (general.market.notifyPurchases) {
-        try {
-          await browser.notifications.create(`market-buy:${l.id}`, { type: "basic", title: "Auto Twish — compra no Mercado", message: msg });
-        } catch (e) {}
+      let money = balance;
+      const would = [];
+      for (const c of candidates) {
+        if (money !== null && c.l.asking_price > money) continue;
+        would.push(c);
+        if (money !== null) money -= c.l.asking_price;
       }
+      const total = would.reduce((s, c) => s + c.l.asking_price, 0);
+      msg =
+        `Simulação (aquisição desligada): ${candidates.length} anúncio(s) dentro dos critérios; ` +
+        (would.length
+          ? `compraria ${would.length} por ${total} no total — ${would.slice(0, 5).map((c) => `${c.species.name} ${c.l.weight} kg (${c.pct}%) por ${c.l.asking_price}`).join("; ")}${would.length > 5 ? "; …" : ""}`
+          : "nenhum cabe no saldo") +
+        (balance !== null ? `. Saldo: ${balance}.` : ".");
       return;
     }
 
-    const err = String((res.data && (res.data.error || res.data.message)) || `erro ${res.status || "de rede"}`);
-    if (/saldo|insuficiente|insufficient|not_enough|coins/i.test(err)) {
-      await disableMarket(`Aquisição desativada: saldo insuficiente (${err}).`);
-      msg = "";
-      return;
+    // Compra um por um, ate completar as quantidades ou acabar o saldo.
+    const left = new Map(list.map((e) => [e.id, remainingOf(e)]));
+    const bought = [];
+    let skippedForCoins = 0;
+    let stopReason = "";
+    for (const c of candidates) {
+      if ((left.get(c.entry.id) || 0) <= 0) continue;
+      if (balance !== null && c.l.asking_price > balance) {
+        skippedForCoins++;
+        continue;
+      }
+      await readSafetyLock();
+      if (safetyLocked) {
+        stopReason = "verificação pendente";
+        break;
+      }
+
+      const res = await twishApi(`/api/${encodeURIComponent(boat)}/market/listings/${encodeURIComponent(c.l.id)}/buy`, {
+        method: "POST",
+        body: {}
+      });
+
+      if (res.ok) {
+        bought.push(c);
+        left.set(c.entry.id, left.get(c.entry.id) - 1);
+        if (balance !== null) balance -= c.l.asking_price;
+        await addBought(c.entry.id);
+        const purchase = { at: Date.now(), fish: c.species.name, weight: c.l.weight, pct: c.pct, price: c.l.asking_price, seller: c.l.seller };
+        await updateMarketState((st) => {
+          st.purchases = [purchase, ...(st.purchases || [])].slice(0, MAX_RECENT_PURCHASES);
+          st.outOfCoins = false;
+        });
+        console.log(`${AT.LOG_PREFIX} Mercado: comprou ${c.species.name} ${c.l.weight} kg (${c.pct}%) por ${c.l.asking_price}.`);
+      } else {
+        const err = String((res.data && (res.data.error || res.data.message)) || `erro ${res.status || "de rede"}`);
+        if (/saldo|insuficiente|insufficient|not_enough|coins/i.test(err)) {
+          stopReason = "moedas acabaram";
+          await notifyOutOfCoins(balance);
+          break;
+        }
+        if (/blocked|automa|challenge|verifica/i.test(err)) {
+          await checkChallenge("mercado");
+          stopReason = "verificação";
+          break;
+        }
+        if (res.status === 401) {
+          stopReason = "sem login no twish.com.br";
+          break;
+        }
+        // Anuncio ja vendido/removido etc.: segue pro proximo.
+        console.warn(`${AT.LOG_PREFIX} Mercado: não comprou ${c.species.name} (${err}).`);
+      }
+      await sleepMs(800 + Math.random() * 1200); // pausa curta entre compras
     }
-    if (/blocked|automa|challenge|verifica/i.test(err)) {
-      await checkChallenge("mercado");
+
+    if (bought.length && general.market.notifyPurchases) {
+      const total = bought.reduce((s, c) => s + c.l.asking_price, 0);
+      try {
+        await browser.notifications.create(`market-buy:${Date.now()}`, {
+          type: "basic",
+          title: "Auto Twish — compras no Mercado",
+          message: `${bought.length} peixe(s) por ${total} no total: ${bought.slice(0, 4).map((c) => `${c.species.name} ${c.l.weight} kg`).join(", ")}${bought.length > 4 ? "…" : ""}`
+        });
+      } catch (e) {}
     }
-    if (res.status === 401) {
-      msg = "Não consegui comprar: você está logado no twish.com.br neste Firefox?";
-      return;
-    }
-    msg = `Não comprou ${species.name} (${err}).`;
+    if (skippedForCoins && !stopReason) await notifyOutOfCoins(balance);
+
+    const total = bought.reduce((s, c) => s + c.l.asking_price, 0);
+    msg =
+      (bought.length ? `Comprou ${bought.length} peixe(s) por ${total} no total.` : "Nenhuma compra nesta verificação.") +
+      (skippedForCoins ? ` ${skippedForCoins} anúncio(s) acima do saldo.` : "") +
+      (stopReason ? ` Parou: ${stopReason}.` : "") +
+      (balance !== null ? ` Saldo: ${balance}.` : "");
   } catch (e) {
     msg = `Erro no ciclo: ${e && e.message ? e.message : e}`;
     console.warn(`${AT.LOG_PREFIX} Mercado:`, e);
@@ -232,6 +314,12 @@ function sanitizeAcquisition(e) {
     minPct: num(e.minPct),
     maxPrice: num(e.maxPrice),
     maxPriceBelow95: num(e.maxPriceBelow95),
+    // Quantidade a comprar: inteiro >= 1, ou null = sem limite (ate acabar o saldo).
+    quantity: (() => {
+      const q = parseInt(e.quantity, 10);
+      return Number.isFinite(q) && q >= 1 ? q : null;
+    })(),
+    bought: Math.max(0, parseInt(e.bought, 10) || 0),
     enabled: !!e.enabled
   };
 }

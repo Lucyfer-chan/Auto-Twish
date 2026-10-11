@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.5
+# Auto Twish — v 0.3.6
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -134,12 +134,19 @@ Na página de configurações, seção "Mercado". Desligada por padrão.
   peixe precisa ter o peso mínimo e custar até o valor máximo; com 95% ou
   mais, compra; abaixo de 95%, só compra se custar até o "máx. abaixo de 95%"
   e tiver a % mínima.
+- Quantidade a comprar por peixe (vazio = sem limite, até acabar as moedas).
+  A lista mostra "Comprados X de Y"; ao completar, o peixe fica concluído e
+  sai das compras ("Recomeçar" zera a contagem).
 - A cada verificação (intervalo escolhido, de 5 a 600 s, com variação de
-  ±25%), consulta os anúncios pela API do site e compra no máximo um: o mais
-  barato dentro dos critérios. Ignora os seus próprios anúncios.
+  ±25%), consulta os anúncios pela API do site e compra todos os que estão
+  dentro dos critérios, do mais barato para o mais caro, até completar as
+  quantidades ou acabar o saldo de twishcoins do barco escolhido (lido pela
+  conta antes de comprar). Pausa de 1–2 s entre compras. Ignora os seus
+  próprios anúncios.
 - Barco usado nas compras: escolhível (o mercado é compartilhado, mas a
   compra passa pelo endereço de um canal).
-- Desliga sozinha com saldo insuficiente e pausa com a trava de segurança.
+- Sem saldo, avisa uma vez e continua ligada: volta a comprar quando houver
+  saldo. Pausa com a trava de segurança.
 - "Verificar agora" com a aquisição desligada só **simula**: mostra o que
   compraria, sem comprar.
 - Precisa estar logado no twish.com.br neste Firefox.
@@ -148,7 +155,7 @@ Na página de configurações, seção "Mercado". Desligada por padrão.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.5 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.6 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -216,6 +223,12 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.6** — Mercado: compra em quantidade.
+  - Campo "Quantidade a comprar" (vazio = sem limite); contagem de comprados,
+    "concluído" e "Recomeçar".
+  - Cada verificação compra todos os anúncios dentro dos critérios (do mais
+    barato) até a quantidade ou o fim do saldo (lido da conta no barco).
+  - Sem saldo: avisa e espera, em vez de desligar a aquisição.
 - **v 0.3.5** — Mercado: lista de aquisição refeita.
   - Corrigido: valores digitados não eram salvos depois da primeira gravação
     (a lista era trocada e os campos ficavam presos à cópia antiga); vírgula
