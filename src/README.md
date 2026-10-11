@@ -1,4 +1,4 @@
-# Auto Twish — v 0.4.1
+# Auto Twish — v 0.4.2
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -182,6 +182,20 @@ Twitch precisa estar aberta.
   configurável. Saldo por barco lido pela conta (sem login, não compra); relê o
   saldo após cada compra para confirmar. Varas/anzóis/mochilas: 1, pula se já
   tem ou falta o anterior. Fora: Turbo Torneio e tickets.
+- **Eventos — isca e reforços** (XP em Dobro, Maré Turbo, Sorte Rara, cada
+  um com sua configuração): equipa a isca escolhida (`$isca`) enquanto o evento
+  durar e mantém o Turbo de Pesca e/ou a Afiação de Anzol ativos (renova quando
+  acabam). Sem o item, compra (`$comprar`) se permitido. Ativar item é feito
+  pela API do site (`/me/use/{item}`, sem comando de chat — liberado pelo
+  jogador). No fim, volta a isca de antes.
+- **Torneio** (lido em `/api/{canal}/tournament`, a cada 30 s e quando o bot
+  fala de torneio com `$entrar`): entrada automática com regra "pescar antes"
+  (se o CD acaba antes de fecharem as inscrições, pesca e entra logo depois;
+  faltando 15 s, entra), "sempre" ou "tempo mínimo (min:s)"; isca do torneio;
+  Turbo Torneio (um por torneio) e Graxa de Molinete (renova), com compra
+  opcional.
+- **Isca no duelo**: ao aceitar, `$isca <id> 1`; no fim do duelo, volta.
+- Duelo e torneio: tempo mínimo de CD em minutos e segundos.
 - Aviso opcional quando uma automação agir.
 
 ## Instalação — Firefox normal (permanente, assinada)
@@ -199,7 +213,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.4.1 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.4.2 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -267,6 +281,8 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.4.2** — Isca e reforços por evento, Torneio (entrada "pescar antes",
+  isca, Turbo Torneio, Graxa de Molinete), isca no duelo; regras de CD em min:s.
 - **v 0.4.1** — Preparada para o Firefox normal: manifest declara
   `data_collection_permissions: { required: ["none"] }` (exigência da Mozilla
   para assinar). `web-ext lint`: 0 erros, 0 avisos.

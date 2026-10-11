@@ -263,6 +263,12 @@ function handleChatLine(node) {
     browser.runtime.sendMessage({ type: "CHAT_VERIFICATION_HINT", mentions }).catch(() => {});
   }
 
+  // Torneio: qualquer mensagem do bot sobre torneio que cite $entrar faz o
+  // background conferir a API do torneio na hora (o formato exato nao importa).
+  if (/torneio/i.test(text) && /\$(entrar|join)\b/i.test(text)) {
+    browser.runtime.sendMessage({ type: "CHAT_TOURNAMENT_HINT" }).catch(() => {});
+  }
+
   const featured = FEATURED_RE.exec(text);
   if (featured) {
     browser.runtime.sendMessage({ type: "CHAT_FEATURED_FISH", fish: featured[1].trim() }).catch(() => {});

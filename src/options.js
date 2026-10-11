@@ -16,6 +16,19 @@ const notifyAutomationsEl = $("notifyAutomations");
 // Campos das automacoes (usados no padrao geral e nas excecoes dos canais).
 // save(patch) recebe so o que mudou.
 // ---------------------------------------------------------------------------
+// Campos minutos + segundos -> segundos (vazio conta como 0).
+function readMinSec(minEl, secEl) {
+  const m = parseInt(String(minEl.value).trim() || "0", 10);
+  const s = parseInt(String(secEl.value).trim() || "0", 10);
+  if (!Number.isFinite(m) || !Number.isFinite(s) || m < 0 || s < 0) return null;
+  return Math.min(AT.MAX_MIN_SECONDS, m * 60 + s);
+}
+function writeMinSec(minEl, secEl, total) {
+  if (document.activeElement === minEl || document.activeElement === secEl) return;
+  minEl.value = Math.floor(total / 60);
+  secEl.value = String(total % 60).padStart(2, "0");
+}
+
 function mountDuelEditor(host, save) {
   const root = $("duelTemplate").content.firstElementChild.cloneNode(true);
   host.appendChild(root);
@@ -25,9 +38,8 @@ function mountDuelEditor(host, save) {
     fields: q(".js-duel-fields"),
     rule: q(".js-duel-rule"),
     valueField: q(".js-duel-value-field"),
-    valueLabel: q(".js-duel-value-label"),
-    value: q(".js-duel-value"),
-    hint: q(".js-duel-value-hint")
+    min: q(".js-duel-min"),
+    sec: q(".js-duel-sec")
   };
   for (const r of AT.DUEL_RULES) {
     const o = document.createElement("option");
@@ -38,20 +50,19 @@ function mountDuelEditor(host, save) {
   let cfg = AT.sanitizeDuelAccept(null);
   el.enabled.addEventListener("change", () => save({ enabled: el.enabled.checked }));
   el.rule.addEventListener("change", () => save({ rule: el.rule.value }));
-  el.value.addEventListener("change", () => {
-    const key = cfg.rule === "minutes" ? "minutes" : "pct";
-    save({ [key]: el.value.value });
-  });
+  const onTime = () => {
+    const v = readMinSec(el.min, el.sec);
+    if (v !== null) save({ minSeconds: v });
+  };
+  el.min.addEventListener("change", onTime);
+  el.sec.addEventListener("change", onTime);
   return function render(next) {
     cfg = AT.sanitizeDuelAccept(next);
     el.enabled.checked = cfg.enabled;
     el.fields.hidden = !cfg.enabled;
     if (document.activeElement !== el.rule) el.rule.value = cfg.rule;
     el.valueField.hidden = cfg.rule === "always";
-    const isMin = cfg.rule === "minutes";
-    el.valueLabel.textContent = isMin ? "Mínimo (minutos para pescar)" : "Mínimo (% do CD da pesca)";
-    el.hint.textContent = isMin ? "de 1 a 60" : "de 1 a 100 — ex: 50 = só aceita se faltar metade ou mais";
-    if (document.activeElement !== el.value) el.value.value = isMin ? cfg.minutes : cfg.pct;
+    writeMinSec(el.min, el.sec, cfg.minSeconds);
   };
 }
 
@@ -373,10 +384,185 @@ function mountShopEditor(host, save) {
   return render;
 }
 
+// ---------------------------------------------------------------------------
+// Eventos (isca e reforcos), Torneio, Isca no duelo
+// ---------------------------------------------------------------------------
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else e.setAttribute(k, v);
+  }
+  for (const c of kids) if (c != null) e.append(c);
+  return e;
+}
+function checkRow(label, hint) {
+  const cb = h("input", { type: "checkbox" });
+  const row = h("label", { class: "check-row" }, cb, h("span", {}, label, hint ? h("span", { class: "hint", style: "display:block", text: hint }) : null));
+  return { row, cb };
+}
+function baitSelect() {
+  const sel = h("select");
+  sel._fill = () => {
+    const keep = sel.dataset.want || sel.value;
+    sel.innerHTML = "";
+    sel.append(h("option", { value: "", text: "— não trocar a isca —" }));
+    const baits = shopCatalog.filter((e) => e.category === "baits");
+    if (keep && !baits.some((b) => b.id === keep)) sel.append(h("option", { value: keep, text: keep }));
+    for (const b of baits) sel.append(h("option", { value: b.id, text: b.name }));
+    sel.value = keep || "";
+  };
+  sel._fill();
+  shopEditors.add(() => sel._fill());
+  return sel;
+}
+function setBait(sel, id) {
+  sel.dataset.want = id || "";
+  if (document.activeElement !== sel) sel._fill();
+}
+
+function mountKitEditor(host, save) {
+  host.append(
+    h("div", { class: "setting-title", text: "Eventos: isca e reforços" }),
+    h("div", {
+      class: "hint",
+      text: "Enquanto o evento durar: equipa a isca escolhida ($isca) e mantém ativos o Turbo de Pesca (Impulso) e/ou a Afiação de Anzol (Cuidado), renovando quando acabam. Sem o item no inventário, compra ($comprar) se você permitir. Ativar o item é feito pelo site (não existe comando de chat para isso). No fim do evento, volta a isca que você estava usando."
+    })
+  );
+  const rows = {};
+  for (const kind of AT.KIT_EVENTS) {
+    const on = checkRow(h("strong", { text: AT.KIT_EVENT_LABELS[kind] }));
+    const bait = baitSelect();
+    const turbo = checkRow("Ativar Turbo de Pesca (20 s de CD por 5 min)");
+    const turboBuy = checkRow("comprar se não tiver");
+    const sharpen = checkRow("Ativar Afiação de Anzol (+5% pontos e XP por 30 min)");
+    const sharpenBuy = checkRow("comprar se não tiver");
+    const sub = h(
+      "div",
+      { class: "kit-sub" },
+      h("div", { class: "acq-field", style: "max-width:320px;margin-top:6px" }, h("label", { text: "Isca durante o evento" }), bait),
+      turbo.row,
+      h("div", { class: "kit-sub" }, turboBuy.row),
+      sharpen.row,
+      h("div", { class: "kit-sub" }, sharpenBuy.row)
+    );
+    const box = h("div", { class: "kit-event" }, on.row, sub);
+    on.row.style.marginTop = "0";
+    host.append(box);
+    const send = (p) => save({ [kind]: p });
+    on.cb.addEventListener("change", () => send({ enabled: on.cb.checked }));
+    bait.addEventListener("change", () => send({ baitId: bait.value || null }));
+    turbo.cb.addEventListener("change", () => send({ turbo: turbo.cb.checked }));
+    turboBuy.cb.addEventListener("change", () => send({ turboBuy: turboBuy.cb.checked }));
+    sharpen.cb.addEventListener("change", () => send({ sharpen: sharpen.cb.checked }));
+    sharpenBuy.cb.addEventListener("change", () => send({ sharpenBuy: sharpenBuy.cb.checked }));
+    rows[kind] = { on, sub, bait, turbo, turboBuy, sharpen, sharpenBuy };
+  }
+  return function render(next) {
+    const kit = AT.sanitizeEventKit(next);
+    for (const kind of AT.KIT_EVENTS) {
+      const r = rows[kind];
+      const e = kit[kind];
+      r.on.cb.checked = e.enabled;
+      r.sub.hidden = !e.enabled;
+      setBait(r.bait, e.baitId);
+      r.turbo.cb.checked = e.turbo;
+      r.turboBuy.cb.checked = e.turboBuy;
+      r.turboBuy.row.hidden = !e.turbo;
+      r.sharpen.cb.checked = e.sharpen;
+      r.sharpenBuy.cb.checked = e.sharpenBuy;
+      r.sharpenBuy.row.hidden = !e.sharpen;
+    }
+  };
+}
+
+function mountTourneyEditor(host, save) {
+  host.append(
+    h("div", { class: "setting-title", text: "Torneio" }),
+    h("div", { class: "hint", text: "Lido pela sua conta no site (página do torneio), conferido a cada 30 s e na hora em que o bot falar de torneio no chat." })
+  );
+  const join = checkRow(
+    h("span", {}, h("strong", { text: "Entrar automaticamente" }), " ", h("span", { class: "hint", text: "($entrar)" })),
+    "Entrar no torneio zera o CD da pesca. No padrão, se o CD acabar antes de fecharem as inscrições, a extensão pesca antes e entra logo depois (só se ela pescar neste canal); faltando 15 s para fechar, entra de qualquer jeito."
+  );
+  const rule = h("select");
+  for (const r of AT.TOURNEY_RULES) rule.append(h("option", { value: r, text: AT.TOURNEY_RULE_LABELS[r] }));
+  const tMin = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", "aria-label": "minutos" });
+  const tSec = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", "aria-label": "segundos" });
+  const valueField = h(
+    "div",
+    { class: "acq-field" },
+    h("label", { text: "Tempo mínimo para pescar" }),
+    h("div", { class: "minsec" }, tMin, h("span", { text: "min" }), tSec, h("span", { text: "s" })),
+    h("div", { class: "field-hint", text: "só entra se faltar pelo menos isso para o $pescar" })
+  );
+  const joinFields = h("div", { class: "auto-fields" }, h("div", { class: "acq-field" }, h("label", { text: "Quando entrar" }), rule), valueField);
+  const bait = baitSelect();
+  const boost = checkRow("Ativar Turbo Torneio (10 s de CD por 3 min; um por torneio)");
+  const boostBuy = checkRow("comprar se não tiver");
+  const grease = checkRow("Ativar Graxa de Molinete (peixe 5% mais pesado por 20 lançadas; renova)");
+  const greaseBuy = checkRow("comprar se não tiver");
+  host.append(
+    join.row,
+    joinFields,
+    h("div", { class: "acq-field", style: "max-width:320px;margin:10px 0 0 26px" }, h("label", { text: "Isca durante o torneio" }), bait),
+    h("div", { style: "margin-left:26px" }, boost.row, h("div", { class: "kit-sub" }, boostBuy.row), grease.row, h("div", { class: "kit-sub" }, greaseBuy.row))
+  );
+  let cfg = AT.sanitizeTournament(null);
+  join.cb.addEventListener("change", () => save({ join: join.cb.checked }));
+  rule.addEventListener("change", () => save({ rule: rule.value }));
+  const onTTime = () => {
+    const v = readMinSec(tMin, tSec);
+    if (v !== null) save({ minSeconds: v });
+  };
+  tMin.addEventListener("change", onTTime);
+  tSec.addEventListener("change", onTTime);
+  grease.cb.addEventListener("change", () => save({ grease: grease.cb.checked }));
+  greaseBuy.cb.addEventListener("change", () => save({ greaseBuy: greaseBuy.cb.checked }));
+  bait.addEventListener("change", () => save({ baitId: bait.value || null }));
+  boost.cb.addEventListener("change", () => save({ boost: boost.cb.checked }));
+  boostBuy.cb.addEventListener("change", () => save({ boostBuy: boostBuy.cb.checked }));
+  return function render(next) {
+    cfg = AT.sanitizeTournament(next);
+    join.cb.checked = cfg.join;
+    joinFields.hidden = !cfg.join;
+    if (document.activeElement !== rule) rule.value = cfg.rule;
+    valueField.hidden = cfg.rule !== "minTime";
+    writeMinSec(tMin, tSec, cfg.minSeconds);
+    grease.cb.checked = cfg.grease;
+    greaseBuy.cb.checked = cfg.greaseBuy;
+    greaseBuy.row.hidden = !cfg.grease;
+    setBait(bait, cfg.baitId);
+    boost.cb.checked = cfg.boost;
+    boostBuy.cb.checked = cfg.boostBuy;
+    boostBuy.row.hidden = !cfg.boost;
+  };
+}
+
+function mountDuelBaitEditor(host, save) {
+  const on = checkRow(h("span", {}, h("strong", { text: "Isca no duelo" }), " ", h("span", { class: "hint", text: "($isca <id> 1)" })), "Ao aceitar um duelo (por você ou pela extensão), equipa 1 isca; quando o duelo termina, volta a isca de antes.");
+  on.row.style.marginTop = "0";
+  const bait = baitSelect();
+  const field = h("div", { class: "acq-field", style: "max-width:320px;margin:8px 0 0 26px" }, h("label", { text: "Isca do duelo" }), bait);
+  host.append(on.row, field);
+  on.cb.addEventListener("change", () => save({ enabled: on.cb.checked }));
+  bait.addEventListener("change", () => save({ baitId: bait.value || null }));
+  return function render(next) {
+    const c = AT.sanitizeDuelBait(next);
+    on.cb.checked = c.enabled;
+    field.hidden = !c.enabled;
+    setBait(bait, c.baitId);
+  };
+}
+
 const renderGeneralDuel = mountDuelEditor($("generalDuel"), (patch) => updateGeneral({ duelAccept: patch }));
 const renderGeneralSell = mountSellEditor($("generalSell"), (patch) => updateGeneral({ turboSell: patch }));
 const renderGeneralProtect = mountProtectEditor($("generalProtect"), (patch) => updateGeneral({ protection: patch }));
 const renderGeneralShop = mountShopEditor($("generalShop"), (patch) => updateGeneral({ shopList: patch }));
+const renderGeneralKit = mountKitEditor($("generalKit"), (patch) => updateGeneral({ eventKit: patch }));
+const renderGeneralTourney = mountTourneyEditor($("generalTourney"), (patch) => updateGeneral({ tournament: patch }));
+const renderGeneralDuelBait = mountDuelBaitEditor($("generalDuelBait"), (patch) => updateGeneral({ duelBait: patch }));
 let gameState = {};
 
 $("version").textContent = `v ${browser.runtime.getManifest().version}`;
@@ -400,6 +586,9 @@ function renderGeneral() {
   renderGeneralSell(g.turboSell);
   renderGeneralProtect(g.protection);
   renderGeneralShop(g.shopList);
+  renderGeneralKit(g.eventKit);
+  renderGeneralTourney(g.tournament);
+  renderGeneralDuelBait(g.duelBait);
   $("loginInfo").textContent = g.twishLogin ? `conta reconhecida: ${g.twishLogin}` : "ainda não lida (abra o popup num canal estando logado no twish.com.br)";
 }
 
@@ -479,6 +668,21 @@ function createCard(name) {
   els.shopStatus = q(".js-shop-status");
   els.renderShop = mountShopEditor(els.shopHost, (patch) => updateChannel(name, { shopList: patch }));
   els.shopDefault.addEventListener("change", () => updateChannel(name, { shopList: els.shopDefault.checked ? null : {} }));
+  for (const [key, cls, mount] of [
+    ["eventKit", "kit", mountKitEditor],
+    ["tournament", "tourney", mountTourneyEditor],
+    ["duelBait", "duelbait", mountDuelBaitEditor]
+  ]) {
+    const def = q(`.js-${cls}-default`);
+    const hostEl = q(`.js-${cls}-host`);
+    els[`${cls}Default`] = def;
+    els[`${cls}Summary`] = q(`.js-${cls}-summary`);
+    els[`${cls}Host`] = hostEl;
+    els[`${cls}Render`] = mount(hostEl, (patch) => updateChannel(name, { [key]: patch }));
+    def.addEventListener("change", () => updateChannel(name, { [key]: def.checked ? null : {} }));
+  }
+  els.kitStatusRow = q(".js-kit-status-row");
+  els.kitStatus = q(".js-kit-status");
   els.renderProtect = mountProtectEditor(els.protectHost, (patch) => updateChannel(name, { protection: patch }));
   els.protectDefault.addEventListener("change", () => updateChannel(name, { protection: els.protectDefault.checked ? null : {} }));
   els.protectCheck.addEventListener("click", async () => {
@@ -591,6 +795,16 @@ function renderCard(name) {
   els.protectSummary.textContent = AT.describeProtection(AT.sanitizeProtection(g.protection));
   els.protectHost.hidden = !s.protection;
   if (s.protection) els.renderProtect(s.protection);
+  for (const [key, cls, describe, sanitize] of [
+    ["eventKit", "kit", AT.describeEventKit, AT.sanitizeEventKit],
+    ["tournament", "tourney", AT.describeTournament, AT.sanitizeTournament],
+    ["duelBait", "duelbait", AT.describeDuelBait, AT.sanitizeDuelBait]
+  ]) {
+    els[`${cls}Default`].checked = !s[key];
+    els[`${cls}Summary`].textContent = describe(sanitize(g[key]));
+    els[`${cls}Host`].hidden = !s[key];
+    if (s[key]) els[`${cls}Render`](s[key]);
+  }
   els.shopDefault.checked = !s.shopList;
   els.shopSummary.textContent = AT.describeShopList(AT.sanitizeShopList(g.shopList));
   els.shopHost.hidden = !s.shopList;
@@ -615,8 +829,20 @@ function renderShopStatus(name) {
       : "Lista de Compras: esperando o próximo Desconto na Loja.";
 }
 
+function renderKitStatus(name) {
+  const card = cards.get(name);
+  const s = state.channels[name];
+  if (!card || !s) return;
+  const k = (gameState[name] || {}).kit;
+  const show = !!(k && k.lastAt);
+  card.els.kitStatusRow.hidden = !show;
+  if (!show) return;
+  card.els.kitStatus.textContent = `Eventos/torneio (${new Date(k.lastAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}): ${k.lastMsg || ""}`;
+}
+
 function renderProtectStatus(name) {
   renderShopStatus(name);
+  renderKitStatus(name);
   const card = cards.get(name);
   const s = state.channels[name];
   if (!card || !s) return;

@@ -350,6 +350,34 @@
     color: var(--text);
     font-size: 13px;
   }
+  .minsec {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .minsec input {
+    width: 64px !important;
+  }
+  .minsec span {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .kit-event {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: var(--bg);
+    margin-top: 8px;
+  }
+  .kit-event .setting-title {
+    font-size: 13px;
+  }
+  .kit-sub {
+    margin-left: 26px;
+  }
+  .kit-sub .check-row {
+    margin-top: 6px;
+  }
   .shop-form {
     margin-top: 10px;
     border: 1px solid var(--accent);
@@ -424,6 +452,9 @@
     <div id="generalSell" class="setting"></div>
     <div id="generalProtect" class="setting"></div>
     <div id="generalShop" class="setting"></div>
+    <div id="generalKit" class="setting"></div>
+    <div id="generalTourney" class="setting"></div>
+    <div id="generalDuelBait" class="setting"></div>
     <div class="setting">
       <label class="check-row" style="margin-top:0">
         <input type="checkbox" id="notifyAutomations" />
@@ -581,6 +612,24 @@
         <span>Lista de Compras: usar o padrão geral <span class="hint">(<span class="js-shop-summary"></span>)</span></span>
       </label>
       <div class="auto-override js-shop-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-kit-default" />
+        <span>Eventos (isca e reforços): usar o padrão geral <span class="hint">(<span class="js-kit-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-kit-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-tourney-default" />
+        <span>Torneio: usar o padrão geral <span class="hint">(<span class="js-tourney-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-tourney-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-duelbait-default" />
+        <span>Isca no duelo: usar o padrão geral <span class="hint">(<span class="js-duelbait-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-duelbait-host"></div>
+      <div class="protect-status js-kit-status-row">
+        <span class="js-kit-status"></span>
+      </div>
       <div class="protect-status js-shop-status-row">
         <span class="js-shop-status"></span>
       </div>
@@ -624,9 +673,12 @@
         <select class="js-duel-rule"></select>
       </div>
       <div class="acq-field js-duel-value-field">
-        <label class="js-duel-value-label">Mínimo</label>
-        <input type="text" inputmode="numeric" autocomplete="off" class="js-duel-value" />
-        <div class="field-hint js-duel-value-hint"></div>
+        <label>Tempo mínimo para pescar</label>
+        <div class="minsec">
+          <input type="text" inputmode="numeric" autocomplete="off" class="js-duel-min" aria-label="minutos" /><span>min</span>
+          <input type="text" inputmode="numeric" autocomplete="off" class="js-duel-sec" aria-label="segundos" /><span>s</span>
+        </div>
+        <div class="field-hint">só aceita se faltar pelo menos isso para o $pescar</div>
       </div>
     </div>
   </div>

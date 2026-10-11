@@ -278,9 +278,14 @@ function cooldownMultiplierFor(channel) {
 
 // Estimativa do proximo envio pela vara (+ atraso). Se houver Mare Turbo
 // ativa no canal, aplica o multiplicador ao tempo da vara.
+// Turbo ativo (kit.js): { until, cdMs } — Turbo de Pesca 20 s, Turbo Torneio 10 s.
+const boostUntil = new Map();
+
 function computeDelayMs(settings, channel) {
   const baseMinutes = ROD_MINUTES[settings.rod] || ROD_MINUTES[DEFAULT_ROD];
-  const baseMs = baseMinutes * 60 * 1000 * cooldownMultiplierFor(channel);
+  let baseMs = baseMinutes * 60 * 1000 * cooldownMultiplierFor(channel);
+  const boost = boostUntil.get(channel);
+  if (boost && boost.until > Date.now()) baseMs = Math.min(baseMs, boost.cdMs);
   return baseMs + computeJitterMs(settings);
 }
 
@@ -712,6 +717,13 @@ async function applyChannelSettings(channel, patch) {
     if ("duelAccept" in patch) {
       s.duelAccept = patch.duelAccept === null ? null : AT.sanitizeDuelAccept({ ...AT.effectiveDuelAccept(previous, stateCache && stateCache.general), ...patch.duelAccept });
     }
+    for (const [key, eff, merge] of [
+      ["eventKit", AT.effectiveEventKit, (a, b) => mergeEventKit(a, b)],
+      ["tournament", AT.effectiveTournament, (a, b) => AT.sanitizeTournament({ ...a, ...b })],
+      ["duelBait", AT.effectiveDuelBait, (a, b) => AT.sanitizeDuelBait({ ...a, ...b })]
+    ]) {
+      if (key in patch) s[key] = patch[key] === null ? null : merge(eff(previous, stateCache && stateCache.general), patch[key]);
+    }
     if ("shopList" in patch) {
       s.shopList = patch.shopList === null ? null : AT.sanitizeShopList({ ...AT.effectiveShopList(previous, stateCache && stateCache.general), ...patch.shopList });
     }
@@ -765,6 +777,7 @@ async function applyChannelSettings(channel, patch) {
   if ("turboSell" in patch) await reevaluateTurboSell(channel);
   if ("protection" in patch) onProtectionSettingsChanged(channel);
   if ("shopList" in patch) await reevaluateShopping(channel);
+  if (["eventKit", "tournament", "duelBait"].some((k) => k in patch) && typeof onKitSettingsChanged === "function") onKitSettingsChanged(channel);
   if (!settings.enabled || reschedules) {
     await scheduleDueAlarm(channel, settings.nextFireAt);
   }
@@ -790,6 +803,14 @@ async function reevaluateTurboSell(only) {
       await scheduleTurboSell(channel, ((gameState || {})[channel] || {}).events || null);
     }
   }
+}
+
+// Mescla parcial da configuracao de eventos (por evento).
+function mergeEventKit(cur, patch) {
+  const base = AT.sanitizeEventKit(cur);
+  const out = {};
+  for (const k of AT.KIT_EVENTS) out[k] = { ...base[k], ...((patch && patch[k]) || {}) };
+  return AT.sanitizeEventKit(out);
 }
 
 async function removeChannel(channel) {
@@ -1009,6 +1030,7 @@ async function refreshEvents(channel, notify) {
   }
   await scheduleTurboSell(channel, ev);
   if (typeof scheduleShopping === "function") await scheduleShopping(channel, ev);
+  if (typeof onKitEvents === "function") await onKitEvents(channel, ev);
   return ev;
 }
 
@@ -1018,7 +1040,14 @@ async function refreshEvents(channel, notify) {
 function watchesEvents(s, general) {
   if (!s) return false;
   const shop = AT.effectiveShopList(s, general);
-  return !!(s.notifyEvents || s.enabled || AT.effectiveTurboSell(s, general).enabled || (shop.enabled && shop.items.length));
+  const kit = AT.effectiveEventKit(s, general);
+  return !!(
+    s.notifyEvents ||
+    s.enabled ||
+    AT.effectiveTurboSell(s, general).enabled ||
+    (shop.enabled && shop.items.length) ||
+    AT.KIT_EVENTS.some((k) => AT.kitIsActive(kit[k]))
+  );
 }
 
 async function updateEventsPoller() {
@@ -1126,6 +1155,7 @@ async function maybeAutoAcceptDuel(channel, challenger, expiresAt) {
     browser.notifications.clear(`duel:${channel}`);
   } catch (e) {}
   await notifyAutomation(`duel-auto:${channel}`, `⚔️ Duelo aceito em ${channel}`, `Aceitei o duelo de @${challenger} (${d.why}).`);
+  if (typeof onDuelAccepted === "function") await onDuelAccepted(channel);
   // Aceitar duelo zera o CD da pesca: confere a conta logo depois.
   if (s && s.enabled) schedulePostSendCheck(channel, 5000);
 }
@@ -1233,6 +1263,7 @@ async function onDuelEnd(channel, mentions) {
     browser.notifications.clear(`duel:${channel}`);
   } catch (e) {}
   console.log(`${AT.LOG_PREFIX} Duelo terminou em "${channel}" (${mentions.join(", ")}); proximo duelo as ${new Date(until).toLocaleTimeString()}.`);
+  if (typeof onDuelFinished === "function") await onDuelFinished(channel);
 }
 
 // O jogador mandou um comando que nao e o de pesca (ex: $aceitar, entrar em
@@ -1242,6 +1273,7 @@ async function onUserOtherCommand(channel, text) {
     await mutateGameState(channel, (st) => {
       delete st.duelInvite;
     });
+    if (typeof onDuelAccepted === "function") await onDuelAccepted(channel);
   }
   const s = (await getAllChannelSettings())[channel];
   if (s && s.enabled) schedulePostSendCheck(channel, 5000);
@@ -1538,6 +1570,9 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (patch.turboSell) g.turboSell = AT.sanitizeTurboSell({ ...g.turboSell, ...patch.turboSell });
         if (patch.protection) g.protection = AT.sanitizeProtection({ ...g.protection, ...patch.protection });
         if (patch.shopList) g.shopList = AT.sanitizeShopList({ ...g.shopList, ...patch.shopList });
+        if (patch.eventKit) g.eventKit = mergeEventKit(g.eventKit, patch.eventKit);
+        if (patch.tournament) g.tournament = AT.sanitizeTournament({ ...g.tournament, ...patch.tournament });
+        if (patch.duelBait) g.duelBait = AT.sanitizeDuelBait({ ...g.duelBait, ...patch.duelBait });
         if (patch.semiAuto) {
           g.semiAuto = { ...g.semiAuto };
           if ("focusTab" in patch.semiAuto) g.semiAuto.focusTab = !!patch.semiAuto.focusTab;
@@ -1547,6 +1582,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (patch.turboSell) await reevaluateTurboSell();
       if (patch.protection) onProtectionSettingsChanged(null);
       if (patch.shopList) await reevaluateShopping(null);
+      if ((patch.eventKit || patch.tournament || patch.duelBait) && typeof onKitSettingsChanged === "function") onKitSettingsChanged(null);
       sendResponse({ general: await getGeneralSettings() });
     })();
     return true;
@@ -1631,7 +1667,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|event):([^:]+)/.exec(id);
+    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|event):([^:]+)/.exec(id);
     if (!m) return;
     const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);

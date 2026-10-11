@@ -58,9 +58,8 @@ AT.DEFAULT_GENERAL_SETTINGS = {
   // Automacoes por evento (Road Map item 3). Valor geral; cada canal pode ter uma excecao.
   duelAccept: {
     enabled: false, // aceitar duelos sozinho ($aceitar)
-    rule: "pct", // "always" | "pct" | "minutes" — ver AT.duelAcceptDecision
-    pct: 50, // so aceita se faltar pelo menos isso (%) do CD da pesca
-    minutes: 3 // so aceita se faltar pelo menos isso (min) pro CD da pesca
+    rule: "minTime", // "always" | "minTime" — ver AT.duelAcceptDecision
+    minSeconds: 180 // so aceita se faltar pelo menos isso (s) pro CD da pesca
   },
   turboSell: {
     enabled: false, // Venda Turbinada: $vender todos perto do fim do evento
@@ -79,6 +78,12 @@ AT.DEFAULT_GENERAL_SETTINGS = {
     reserve: 0, // a lista nunca deixa o saldo abaixo disso
     items: [] // [{ key, itemId, name, mode: "once"|"recurring"|"unlimited", quantity, enabled }]
   },
+  // Isca e reforcos por evento (Road Map item 3): XP em Dobro, Mare Turbo, Sorte Rara.
+  eventKit: null, // preenchido por AT.sanitizeEventKit
+  // Torneio: entrada automatica ($entrar), isca durante o torneio, Turbo Torneio.
+  tournament: null, // preenchido por AT.sanitizeTournament
+  // Duelo: equipar 1 isca para o duelo.
+  duelBait: null, // preenchido por AT.sanitizeDuelBait
   semiAuto: {
     focusTab: true, // ao digitar, traz a aba (e a janela) da Twitch pra frente
     notify: true // mostra notificacao do sistema
@@ -95,12 +100,32 @@ AT.DEFAULT_GENERAL_SETTINGS = {
 // ---------------------------------------------------------------------------
 // Automacoes por evento
 // ---------------------------------------------------------------------------
-AT.DUEL_RULES = ["always", "pct", "minutes"];
+AT.DUEL_RULES = ["always", "minTime"];
 AT.DUEL_RULE_LABELS = {
   always: "Sempre",
-  pct: "Só se faltar pelo menos X% do CD da pesca",
-  minutes: "Só se faltar pelo menos X minutos para pescar"
+  minTime: "Só se faltar pelo menos um tempo para pescar"
 };
+// Torneio: "fishFirst" = se o CD da pesca acaba antes de fecharem as
+// inscricoes, pesca antes e entra logo depois; senao, entra na hora.
+AT.TOURNEY_RULES = ["fishFirst", "always", "minTime"];
+AT.TOURNEY_RULE_LABELS = {
+  fishFirst: "Pescar antes, se o CD acabar antes de fecharem as inscrições",
+  always: "Sempre, na hora",
+  minTime: "Só se faltar pelo menos um tempo para pescar"
+};
+AT.MAX_MIN_SECONDS = 3600;
+
+// "m:ss"
+AT.formatMinSec = function (sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+// Converte configuracoes antigas (% ou minutos) para segundos.
+function legacyMinSeconds(o, fallback) {
+  if (o.minSeconds !== undefined && o.minSeconds !== null && o.minSeconds !== "") return AT.clampInt(o.minSeconds, 0, AT.MAX_MIN_SECONDS, fallback);
+  if (o.rule === "minutes" && o.minutes !== undefined) return AT.clampInt(Number(o.minutes) * 60, 0, AT.MAX_MIN_SECONDS, fallback);
+  return fallback;
+}
 AT.DUEL_ACCEPT_COMMAND = "$aceitar";
 AT.SELL_ALL_COMMAND = "$vender todos";
 
@@ -112,13 +137,11 @@ AT.clampInt = function (v, min, max, fallback) {
 };
 
 AT.sanitizeDuelAccept = function (x) {
-  const d = { enabled: false, rule: "pct", pct: 50, minutes: 3 };
   const o = x && typeof x === "object" ? x : {};
   return {
     enabled: !!o.enabled,
-    rule: AT.DUEL_RULES.includes(o.rule) ? o.rule : d.rule,
-    pct: AT.clampInt(o.pct, 1, 100, d.pct),
-    minutes: AT.clampInt(o.minutes, 1, 60, d.minutes)
+    rule: o.rule === "always" ? "always" : "minTime", // "pct"/"minutes" antigos viram tempo minimo
+    minSeconds: legacyMinSeconds(o, 180)
   };
 };
 
@@ -140,17 +163,12 @@ AT.effectiveTurboSell = function (channelSettings, general) {
 // Aceitar duelo zera o CD da pesca, entao so compensa quando ainda falta
 // bastante. remainingMs = quanto falta pra pescar; fullMs = CD inteiro da vara
 // (com Mare Turbo, se houver). Sem essas informacoes, so a regra "Sempre" aceita.
-AT.duelAcceptDecision = function (cfg, { remainingMs, fullMs }) {
+AT.duelAcceptDecision = function (cfg, { remainingMs }) {
   if (!cfg || !cfg.enabled) return { accept: false, why: "aceite automático desligado" };
   if (cfg.rule === "always") return { accept: true, why: "regra: sempre" };
   if (remainingMs === null || remainingMs === undefined) return { accept: false, why: "não deu pra ler o CD da pesca" };
-  if (cfg.rule === "minutes") {
-    const ok = remainingMs >= cfg.minutes * 60000;
-    return { accept: ok, why: `faltam ${AT.formatRemaining(remainingMs)} para pescar (mínimo ${cfg.minutes} min)` };
-  }
-  if (!(fullMs > 0)) return { accept: false, why: "CD da vara desconhecido" };
-  const pct = Math.round((remainingMs / fullMs) * 100);
-  return { accept: pct >= cfg.pct, why: `faltam ${pct}% do CD da pesca (mínimo ${cfg.pct}%)` };
+  const ok = remainingMs >= cfg.minSeconds * 1000;
+  return { accept: ok, why: `faltam ${AT.formatRemaining(remainingMs)} para pescar (mínimo ${AT.formatMinSec(cfg.minSeconds)})` };
 };
 
 // Id de especie do jogo: minusculas, numeros e "_" (ex: aruana_asiatica).
@@ -254,11 +272,92 @@ AT.discountedPrice = function (cost, rate) {
   return Math.max(0, c);
 };
 
+// ---------------------------------------------------------------------------
+// Isca e reforcos por evento / Torneio / Isca do duelo
+// ---------------------------------------------------------------------------
+AT.KIT_EVENTS = ["double_xp", "cooldown_multiplier", "tier_catch_boost"];
+AT.KIT_EVENT_LABELS = { double_xp: "XP em Dobro", cooldown_multiplier: "Maré Turbo", tier_catch_boost: "Sorte Rara" };
+AT.TURBO_ITEM = "turbo"; // Turbo de Pesca (Impulso): 5 min, CD de 20 s
+AT.SHARPEN_ITEM = "afiacao_anzol"; // Afiacao de Anzol (Cuidado): +5% pontos/XP por 30 min
+AT.TOURNAMENT_TURBO_ITEM = "turbo_torneio"; // Turbo Torneio (Impulso): CD de 10 s por 3 min, um por torneio
+AT.GREASE_ITEM = "graxa_molinete"; // Graxa de Molinete (Cuidado): peixe 5% mais pesado por 20 lancadas
+AT.BAIT_COMMAND = "$isca";
+AT.UNEQUIP_BAIT_COMMAND = "$desequiparisca";
+AT.JOIN_TOURNAMENT_COMMAND = "$entrar";
+
+AT.cleanItemId = function (v) {
+  const t = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return AT.FISH_ID_RE.test(t) ? t : null;
+};
+AT.sanitizeKitEntry = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  return {
+    enabled: !!o.enabled,
+    baitId: AT.cleanItemId(o.baitId), // null = nao mexe na isca
+    turbo: !!o.turbo,
+    turboBuy: !!o.turboBuy,
+    sharpen: !!o.sharpen,
+    sharpenBuy: !!o.sharpenBuy
+  };
+};
+AT.sanitizeEventKit = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  const out = {};
+  for (const k of AT.KIT_EVENTS) out[k] = AT.sanitizeKitEntry(o[k]);
+  return out;
+};
+AT.sanitizeTournament = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  return {
+    join: !!o.join, // entrar sozinho ($entrar)
+    rule: AT.TOURNEY_RULES.includes(o.rule) ? o.rule : "fishFirst",
+    minSeconds: legacyMinSeconds(o, 150),
+    baitId: AT.cleanItemId(o.baitId),
+    boost: !!o.boost, // ativar Turbo Torneio (Impulso; um por torneio)
+    boostBuy: !!o.boostBuy,
+    grease: !!o.grease, // ativar Graxa de Molinete (Cuidado; renova durante o torneio)
+    greaseBuy: !!o.greaseBuy
+  };
+};
+AT.sanitizeDuelBait = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  return { enabled: !!o.enabled, baitId: AT.cleanItemId(o.baitId) };
+};
+AT.effectiveEventKit = function (s, g) {
+  return AT.sanitizeEventKit((s && s.eventKit) || (g || AT.DEFAULT_GENERAL_SETTINGS).eventKit);
+};
+AT.effectiveTournament = function (s, g) {
+  return AT.sanitizeTournament((s && s.tournament) || (g || AT.DEFAULT_GENERAL_SETTINGS).tournament);
+};
+AT.effectiveDuelBait = function (s, g) {
+  return AT.sanitizeDuelBait((s && s.duelBait) || (g || AT.DEFAULT_GENERAL_SETTINGS).duelBait);
+};
+AT.kitIsActive = function (e) {
+  return !!(e && e.enabled && (e.baitId || e.turbo || e.sharpen));
+};
+AT.tournamentIsActive = function (t) {
+  return !!(t && (t.join || t.baitId || t.boost || t.grease));
+};
+AT.describeEventKit = function (kit) {
+  const on = AT.KIT_EVENTS.filter((k) => AT.kitIsActive(kit[k])).map((k) => AT.KIT_EVENT_LABELS[k]);
+  return on.length ? `ligado: ${on.join(", ")}` : "desligado";
+};
+AT.describeTournament = function (t) {
+  const parts = [];
+  if (t.join) parts.push(t.rule === "always" ? "entra sempre" : t.rule === "fishFirst" ? "entra (pesca antes se der)" : `entra se faltar ≥ ${AT.formatMinSec(t.minSeconds)}`);
+  if (t.baitId) parts.push("isca");
+  if (t.boost) parts.push("Turbo Torneio");
+  if (t.grease) parts.push("Graxa");
+  return parts.length ? `ligado: ${parts.join(", ")}` : "desligado";
+};
+AT.describeDuelBait = function (d) {
+  return d.enabled && d.baitId ? "ligado" : "desligado";
+};
+
 AT.describeDuelAccept = function (cfg) {
   if (!cfg.enabled) return "desligado";
   if (cfg.rule === "always") return "ligado, sempre";
-  if (cfg.rule === "pct") return `ligado, se faltar ≥ ${cfg.pct}% do CD`;
-  return `ligado, se faltar ≥ ${cfg.minutes} min`;
+  return `ligado, se faltar ≥ ${AT.formatMinSec(cfg.minSeconds)}`;
 };
 AT.describeTurboSell = function (cfg) {
   return cfg.enabled ? `ligado, ${cfg.secondsBeforeEnd}s antes do fim` : "desligado";
@@ -275,6 +374,9 @@ AT.mergeGeneral = function (saved) {
     turboSell: AT.sanitizeTurboSell(g.turboSell),
     protection: AT.sanitizeProtection(g.protection),
     shopList: AT.sanitizeShopList(g.shopList),
+    eventKit: AT.sanitizeEventKit(g.eventKit),
+    tournament: AT.sanitizeTournament(g.tournament),
+    duelBait: AT.sanitizeDuelBait(g.duelBait),
     market: { ...AT.DEFAULT_GENERAL_SETTINGS.market, ...(g.market || {}) }
   };
 };
@@ -291,6 +393,9 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   turboSell: null, // idem
   protection: null, // idem
   shopList: null, // idem
+  eventKit: null, // idem
+  tournament: null, // idem
+  duelBait: null, // idem
   twishAvailableAt: null, // ultimo horario real de disponibilidade lido do Twish
   twishLastSeen: null, // quando essa leitura foi feita (gravado no maximo 1x/min durante o mesmo cooldown)
   lastSentAt: null, // ultimo envio local bem-sucedido
