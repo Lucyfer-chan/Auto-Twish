@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Auto Twish — Configurações</title>
+<link rel="stylesheet" href="ui.css" />
+<style>
+  body {
+    padding: 32px 16px 64px;
+  }
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .page-header {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 28px;
+  }
+  .page-header h1 {
+    font-size: 20px;
+  }
+  h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin: 32px 0 10px;
+  }
+  .panel {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+  }
+  .panel + .panel {
+    margin-top: 12px;
+  }
+  .setting + .setting {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .setting-title {
+    font-weight: 600;
+  }
+  .setting .hint {
+    margin-top: 4px;
+  }
+  .check-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 10px;
+    cursor: pointer;
+  }
+  .check-row input {
+    margin-top: 2px;
+  }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+  .slider-row input[type="range"] {
+    flex: 1;
+  }
+  .slider-row .value {
+    min-width: 40px;
+    text-align: right;
+  }
+
+  /* Cartao de canal */
+  .channel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .channel-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .channel-name:hover {
+    color: var(--accent-text);
+  }
+  .channel-clock {
+    font-size: 12px;
+    margin-top: 3px;
+  }
+  .channel-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 20px;
+    margin-top: 6px;
+  }
+  .channel-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  .channel-actions .spacer {
+    flex: 1;
+  }
+  .action-status {
+    font-size: 11px;
+    color: var(--text-muted);
+    align-self: center;
+  }
+  .empty {
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+  @media (max-width: 560px) {
+    .channel-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="page-header">
+    <h1>Auto Twish</h1>
+    <span id="version" class="version"></span>
+  </div>
+
+  <h2>Configurações gerais</h2>
+  <section class="panel">
+    <div class="setting">
+      <div class="setting-title">Atraso aleatório máximo (padrão)</div>
+      <div class="hint">Cada envio soma de 0 até esse valor ao tempo da pesca, pra não ficar num ritmo robótico. Vale para todos os canais que não têm uma exceção própria.</div>
+      <div class="slider-row">
+        <input type="range" id="defaultJitter" min="1" max="100" step="1" />
+        <span id="defaultJitterValue" class="value"></span>
+      </div>
+    </div>
+
+    <div class="setting">
+      <div class="setting-title">Modo semi-automático — ao chegar a hora de pescar</div>
+      <div class="hint">O comando é sempre digitado no chat (sem enviar). Escolha o que mais a extensão faz para te chamar:</div>
+      <label class="check-row">
+        <input type="checkbox" id="semiFocus" />
+        <span>Trazer a aba (e a janela) da Twitch para frente
+          <span class="hint" style="display:block">Em alguns sistemas Linux, a janela só pisca na barra de tarefas em vez de vir para frente.</span>
+        </span>
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="semiNotify" />
+        <span>Mostrar notificação do sistema
+          <span class="hint" style="display:block">Clicar na notificação leva até a aba do chat.</span>
+        </span>
+      </label>
+    </div>
+  </section>
+
+  <h2>Canais</h2>
+  <div id="channels"></div>
+</main>
+
+<template id="channelTemplate">
+  <section class="panel channel">
+    <div class="channel-head">
+      <div>
+        <a class="channel-name" target="_blank" rel="noopener"></a>
+        <div class="channel-clock countdown muted"></div>
+      </div>
+      <label class="row-between" style="gap:10px">
+        <span class="hint" style="margin:0">Ativado</span>
+        <input type="checkbox" class="switch js-enabled" />
+      </label>
+    </div>
+
+    <div class="channel-grid">
+      <div>
+        <div class="field-label">Modo</div>
+        <div class="segmented js-mode" role="radiogroup" aria-label="Modo">
+          <button type="button" role="radio" data-mode="manual">Manual</button>
+          <button type="button" role="radio" data-mode="auto">Automático</button>
+          <button type="button" role="radio" data-mode="semi">Semi</button>
+        </div>
+      </div>
+      <div class="js-rod-field">
+        <div class="field-label">Vara</div>
+        <select class="js-rod"></select>
+      </div>
+    </div>
+
+    <div class="setting" style="margin-top:14px">
+      <label class="check-row" style="margin-top:0">
+        <input type="checkbox" class="js-jitter-default" />
+        <span>Usar o atraso padrão (<span class="js-default-value"></span>)</span>
+      </label>
+      <div class="slider-row js-jitter-row">
+        <input type="range" class="js-jitter" min="1" max="100" step="1" />
+        <span class="value js-jitter-value"></span>
+      </div>
+    </div>
+
+    <div class="channel-actions">
+      <button type="button" class="btn secondary js-test">Enviar agora (teste)</button>
+      <span class="action-status js-action-status"></span>
+      <span class="spacer"></span>
+      <button type="button" class="btn danger js-remove">Remover canal</button>
+    </div>
+  </section>
+</template>
+
+<script src="browser-polyfill.js"></script>
+<script src="shared.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,229 @@
+/* ui.css — estilos compartilhados entre o popup e a pagina de configuracoes.
+   Paleta escura no estilo da Twitch. */
+
+:root {
+  --bg: #18181b;
+  --bg-sunken: #0e0e10;
+  --bg-raised: #1f1f23;
+  --border: #3a3a3d;
+  --text: #efeff1;
+  --text-muted: #adadb8;
+  --text-faint: #6a6a6d;
+  --accent: #9147ff;
+  --accent-text: #a970ff;
+  --ok: #7cffb2;
+  --warn: #f0ad4e;
+  --danger: #eb0400;
+  --mono: "SF Mono", Consolas, "DejaVu Sans Mono", monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+h1 {
+  font-size: 14px;
+  margin: 0;
+  color: var(--accent-text);
+}
+
+.version {
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--text-faint);
+}
+
+.field-label,
+label.field-label {
+  display: block;
+  font-size: 12px;
+  margin: 12px 0 5px;
+  color: var(--text-muted);
+}
+
+select {
+  width: 100%;
+  background: var(--bg-sunken);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  font-size: 13px;
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  margin: 2px 0 0;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.value {
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.row-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Interruptor (checkbox estilizado) */
+.switch {
+  appearance: none;
+  position: relative;
+  width: 34px;
+  height: 18px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--border);
+  cursor: pointer;
+  transition: background 0.15s;
+  margin: 0;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.15s;
+}
+.switch:checked {
+  background: var(--accent);
+}
+.switch:checked::after {
+  transform: translateX(16px);
+}
+.switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Seletor de modo (botoes lado a lado) */
+.segmented {
+  display: flex;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px;
+  gap: 2px;
+}
+.segmented button {
+  flex: 1;
+  margin: 0;
+  padding: 6px 4px;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.segmented button:hover:not(:disabled) {
+  color: var(--text);
+}
+.segmented button[aria-checked="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+.segmented button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Botoes */
+.btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 12px;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn.secondary {
+  background: var(--border);
+}
+.btn.danger {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.btn.danger.confirm {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.icon-btn:hover {
+  color: var(--text);
+  background: var(--bg-raised);
+}
+
+/* Textos de apoio */
+.hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.hint.ok {
+  color: var(--ok);
+}
+.hint.stale {
+  color: var(--warn);
+}
+
+.countdown {
+  font-family: var(--mono);
+  color: var(--accent-text);
+  letter-spacing: 0.5px;
+}
+.countdown.muted {
+  font-family: system-ui, sans-serif;
+  color: var(--text-faint);
+}
+.countdown.waiting {
+  font-family: system-ui, sans-serif;
+  color: var(--warn);
+  font-weight: 600;
+}
+
+[hidden] {
+  display: none !important;
+}

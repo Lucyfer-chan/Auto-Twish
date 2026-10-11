@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.0 (estável)
+# Auto Twish — v 0.3.1
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -41,62 +41,50 @@ preferir.
   sucesso, use o **modo automático** (abaixo) — ele sincroniza com o
   cooldown real do site do Twish em vez de confiar só numa estimativa.
 
-## Modo automático (sincroniza com o site do Twish)
+## Modos
 
-Cada canal pode rodar em um de dois modos, escolhidos no popup:
+Cada canal roda em um de três modos, escolhidos no popup ou na página de
+configurações:
 
-- **Manual**: usa só a estimativa de vara + atraso aleatório (como descrito
-  acima). Não depende de nenhuma outra aba estar aberta.
-- **Automático**: além da estimativa da vara (que continua servindo de
-  reserva), a extensão observa o **título** de qualquer aba aberta do site
-  do Twish (`twish.com.br/c/<canal>/<usuário>/...`) — formato `"(mm:ss)
-  Twish"` durante o cooldown, ou `"🎣 Twish"` quando a pesca está
-  disponível — e usa esse horário real pra corrigir o próximo envio sempre
-  que a leitura for mais recente e mais cedo que a estimativa. Sem uma aba
-  do Twish daquele canal aberta (ou com leitura antiga, +5 min), o modo
-  automático se comporta como o manual, sem travar esperando indefinidamente.
+- **Manual**: envia sozinho pelo tempo da vara + atraso aleatório. Não
+  depende de nenhuma outra aba estar aberta. O Twish só é lido em
+  sincronização explícita (veja abaixo).
+- **Automático**: envia sozinho, seguindo o cooldown real lido no **título**
+  da aba do Twish daquele canal (`twish.com.br/c/<canal>/<usuário>/...`):
+  `"(mm:ss) Twish"` durante o cooldown, `"🎣 Twish"` quando a pesca está
+  disponível. Sem aba do Twish (ou com leitura de +5 min), vale a estimativa
+  da vara, sem travar.
+- **Semi-automático**: também segue o cooldown real, mas quando a pesca fica
+  disponível ele só **digita** `$pescar` no chat, sem enviar, e te chama:
+  traz a aba e a janela da Twitch para frente e/ou mostra uma notificação do
+  sistema (cada opção liga e desliga nas Configurações Gerais). Quem aperta
+  Enter é você. Se você estiver escrevendo outra coisa no campo do chat, ele
+  não apaga o seu texto, só avisa. Enquanto espera, não digita de novo.
 
-A extensão também **busca ativamente** a aba do Twish (não só espera o
-título mudar sozinho) nestes momentos: ao abrir o popup, ao trocar o modo e
-ao clicar em "Salvar" — **em qualquer modo, ativada ou não**. O popup mostra o
-resultado da leitura ("Twish: sincronizado — pesca disponível; vara
-detectada", "nenhuma aba aberta para este canal", etc.).
+Comportamentos comuns:
 
-- **Sincronização ativa** (popup / trocar modo / salvar): vale para os dois
-  modos — se o canal estiver ativado, o agendamento é corrigido pelo cooldown
-  real.
-- **Acompanhamento contínuo** (título mudando, checagem de 1 em 1 minuto):
-  só no modo automático. No manual, entre uma abertura do popup e outra, vale
-  a estimativa da vara.
-
-**Vara equipada**: nesses mesmos momentos, a extensão também lê qual vara
-está equipada na página do Twish (procura o slot com classe `is-equipped`)
-e ajusta a seleção de vara automaticamente — não precisa mais escolher a
-vara manualmente se a aba do Twish estiver aberta.
-
-**Disparo imediato ao ativar**: se, no instante em que você marca "Ativado"
-e salva, o Twish já mostrar a pesca disponível (sem cooldown pendente), a
-extensão dispara o primeiro `$pescar` na hora — **em qualquer modo**, manual
-ou automático — sem esperar o atraso aleatório (esse atraso só entra pra
-disfarçar o ritmo dos envios *seguintes*).
-
-**Autocorreção**: no modo automático, se o agendamento estiver mais tarde do
-que o cooldown real permite (ex: o TwishGameBot não respondeu ao último
-`$pescar` e a aba continua mostrando "Twish"), a extensão corrige sozinha —
-ao abrir o popup, ao salvar ou na checagem de 1 em 1 minuto.
-
-Para usar o modo automático: abra, na mesma janela ou em outra aba, a
-página do Twish daquele canal (ex: a página de inventário) — a extensão
-identifica o canal pela URL, não importa qual página específica do site
-esteja aberta, desde que siga o padrão `/c/<canal>/...`. O popup mostra um
-aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
-"dado antigo") indicando se está conseguindo ler o cooldown real.
+- **Sincronização ativa**: ao abrir o popup, trocar o modo, ativar ou trocar
+  a vara, a extensão lê a aba do Twish na hora, em qualquer modo (o popup
+  mostra o resultado: "Twish: sincronizado — pesca disponível; vara
+  detectada", "nenhuma aba aberta para este canal", etc.). O
+  **acompanhamento contínuo** (título mudando, checagem de 1 em 1 minuto) é só
+  do automático e do semi.
+- **Vara equipada**: nesses momentos, a extensão também lê qual vara está
+  equipada na página do Twish e ajusta a seleção sozinha.
+- **Disparo imediato ao ativar**: se o Twish já mostrar a pesca disponível no
+  instante em que você ativa, o primeiro envio (ou aviso, no semi) sai na
+  hora, sem o atraso aleatório.
+- **Autocorreção**: se o agendamento estiver mais tarde do que o cooldown
+  real permite (ex: o TwishGameBot não respondeu), a extensão corrige.
+- **Envio manual detectado**: se você mesmo mandar `$pescar` no chat, em
+  qualquer modo, a extensão reinicia o contador a partir dali e não envia
+  outro durante o cooldown.
 
 ## Instalação — Firefox (temporária, para testar)
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.0 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.1 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -106,64 +94,39 @@ aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
 
 ## Como usar
 
-1. Abra a aba do canal da Twitch onde quer que a mensagem seja enviada (ou
-   `twitch.tv/popout/<canal>/chat`, também funciona).
-2. Clique no ícone da extensão. Ela detecta sozinha o canal da aba ativa e
-   mostra "Canal detectado: nomedocanal" — a configuração salva vale só para
-   aquele canal.
-3. Marque "Ativado neste canal".
-4. Escolha o "Modo": **Manual** (só vara + atraso) ou **Automático**
-   (sincroniza com a aba do Twish desse canal — veja a seção acima).
-5. Escolha a "Vara" — cada uma define o intervalo base entre envios (usado
-   direto no modo manual, e como estimativa de reserva no automático):
+1. Abra a aba do canal da Twitch (ou `twitch.tv/popout/<canal>/chat`) e, de
+   preferência, a página do Twish desse canal (ex: inventário).
+2. Clique no ícone da extensão. O **popup** mostra só o essencial do canal
+   da aba ativa, e tudo se aplica na hora (sem botão "Salvar"):
+   - **Ativado neste canal**;
+   - **Modo**: Manual / Automático / Semi;
+   - **Vara**: só aparece no modo manual (nos outros, o tempo vem do Twish);
+   - o contador "Próximo envio em: mm:ss" (ou "Pesca disponível — envie o
+     $pescar no chat", no semi), a linha de status do Twish e o botão
+     **Configurações** (também na engrenagem ⚙).
+3. A **página de configurações** abre numa aba própria:
+   - **Configurações gerais**: o atraso aleatório máximo padrão (1 a 100 s;
+     cada envio soma de 0 até esse valor) e as opções do semi-automático
+     (trazer a aba para frente; notificação).
+   - **Canais**: um cartão para cada canal configurado, com ativar, modo,
+     vara (no manual), atraso (o padrão ou uma exceção só daquele canal),
+     "Enviar agora (teste)" e "Remover canal" (pede um segundo clique).
+4. Cada canal roda de forma independente, mesmo com vários ativos ao mesmo
+   tempo. O disparo usa um alarme por canal, agendado para o instante exato,
+   mais uma checagem de 1 em 1 minuto como rede de segurança (só enquanto
+   houver algum canal ativado).
 
-   | Vara | Intervalo base |
-   |------|-----------------|
-   | Vara de Bambu | 10 min |
-   | Vara de Madeira Reforçada | 9 min |
-   | Vara de Fibra de Vidro | 8 min |
-   | Vara de Aço | 7 min |
-   | Vara de Carbono | 6 min |
-   | Vara Encantada | 5 min |
-   | Vara Abissal | 4 min |
-   | Vara Lendária | 3 min |
-   | Vara Njord | 2 min |
-
-   Se houver uma aba do Twish aberta pra esse canal, a vara é detectada
-   automaticamente (lendo o item equipado na página) e essa seleção manual
-   é sobrescrita — tanto ao salvar quanto sempre que o popup sincroniza com
-   o Twish (veja a seção abaixo).
-
-   > **Migração**: até a v 0.1.1 as varas usavam ids genéricos
-   > ("vara1".."vara9"). Desde a v 0.1.2 esses ids antigos são convertidos
-   > automaticamente para os nomes reais das varas — não precisa salvar de novo.
-
-   Use o slider "Atraso aleatório máximo" (1 a 100 segundos) para definir
-   até quanto tempo extra pode ser somado ao intervalo da vara em cada
-   envio — o valor real sorteado vai de 0 até esse máximo, pra não ficar
-   num ritmo perfeitamente robótico.
-6. A mensagem enviada é sempre fixa: `$pescar`.
-7. Clique "Salvar para este canal". Use "Enviar uma agora (teste)" para
-   conferir se está funcionando antes de deixar rodando sozinho.
-8. O disparo agora acontece por um alarme dedicado a cada canal, agendado
-   exatamente para o instante em que a vara + atraso terminam — ou seja, o
-   envio sai (quase) na hora certa, sem espera extra. Existe também um
-   heartbeat que confere todos os canais a cada 1 minuto, mas ele é só uma
-   rede de segurança para o caso raro do alarme dedicado não disparar (por
-   exemplo, se o navegador estivesse totalmente fechado naquele instante).
-9. O popup mostra dois contadores, que se atualizam sozinhos (não precisa
-   fechar e reabrir):
-   - "Próximo envio em: MM:SS" — tempo restante até a tentativa deste
-     canal (vara + atraso aleatório, ou horário real do Twish no modo
-     automático).
-   - "Rede de segurança (fallback) em: MM:SS" — só aparece depois que
-     o contador acima chega a zero, e mostra quanto falta pro heartbeat
-     rodar de novo *caso* o alarme dedicado não tenha disparado sozinho.
-     Na maioria das vezes o envio já sai antes disso, então essa linha
-     costuma aparecer só por um instante.
-10. Repita em cada aba/canal que quiser configurar — cada canal guarda sua
-    própria configuração e roda de forma independente, mesmo com vários
-    canais ativos ao mesmo tempo.
+| Vara | Intervalo base |
+|------|-----------------|
+| Vara de Bambu | 10 min |
+| Vara de Madeira Reforçada | 9 min |
+| Vara de Fibra de Vidro | 8 min |
+| Vara de Aço | 7 min |
+| Vara de Carbono | 6 min |
+| Vara Encantada | 5 min |
+| Vara Abissal | 4 min |
+| Vara Lendária | 3 min |
+| Vara Njord | 2 min |
 
 ## Sobre o `browser-polyfill.js`
 
@@ -189,6 +152,20 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.1** — Fase 2 do Road Map: interface nova e modo semi-automático.
+  - Popup reduzido: ativar, modo (Manual/Automático/Semi), vara (só no
+    manual), contador, status do Twish e botão Configurações. Aplica na hora.
+  - Página de configurações em aba própria: gerais (atraso padrão, opções do
+    semi-automático) e um cartão por canal (ativar, modo, vara, atraso
+    padrão ou exceção, testar, remover).
+  - Modo semi-automático: digita `$pescar` sem enviar e chama o jogador
+    (foco da aba/janela e notificação, cada um opcional). Não apaga texto
+    que o jogador esteja escrevendo.
+  - Envio manual de `$pescar` pelo jogador é detectado em qualquer modo e
+    reinicia o contador.
+  - Atraso aleatório: padrão geral + exceção por canal. Migração: canais que
+    estavam com 10 s passam a seguir o padrão; outros valores viram exceção.
+  - Nova permissão: notificações.
 - **v 0.3.0 (estável)** — a v 0.2.2 promovida a estável, sem mudanças de
   código. Reúne a otimização de CPU (0.2.1) e a correção do título
   `🎣 Twish` (0.2.2).

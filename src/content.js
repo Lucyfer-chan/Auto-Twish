@@ -147,9 +147,71 @@ async function typeAndSend(text) {
   }
 }
 
+// Semi-automatico: so DIGITA o texto, sem enviar. Se o jogador ja estiver
+// escrevendo outra coisa no campo, nao apaga — so devolve ok sem digitar
+// (o background avisa o jogador do mesmo jeito).
+async function typeOnly(text) {
+  if (sendInProgress) return { ok: false, reason: "already-sending" };
+  const input = findChatInput();
+  if (!input) return { ok: false, reason: "input-not-found" };
+
+  const current = (input.innerText || input.textContent || "").trim();
+  if (current === text) return { ok: true, typed: true }; // ja esta la
+  if (current !== "") return { ok: true, typed: false }; // rascunho do jogador: nao mexe
+
+  focusEditor(input);
+  await wait(80);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    selectAllWithin(input);
+    document.execCommand("insertText", false, text);
+    if ((input.innerText || input.textContent || "").trim() === text) return { ok: true, typed: true };
+    await wait(120);
+  }
+  return { ok: false, reason: "insert-mismatch" };
+}
+
+// Detecta quando o JOGADOR envia o comando de pesca (Enter ou botao de
+// enviar), em qualquer modo. Eventos gerados pela propria extensao tem
+// isTrusted = false e sao ignorados.
+function currentChatText() {
+  const input = findChatInput();
+  return input ? (input.innerText || input.textContent || "").trim() : "";
+}
+
+function reportIfFishCommand() {
+  const text = currentChatText();
+  if (text === AT.FISH_COMMAND) {
+    browser.runtime.sendMessage({ type: "USER_SENT_COMMAND", text }).catch(() => {});
+  }
+}
+
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (!e.isTrusted || e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    const input = findChatInput();
+    if (input && input.contains(e.target)) reportIfFishCommand();
+  },
+  true // fase de captura: le o texto antes da Twitch limpar o campo
+);
+
+document.addEventListener(
+  "click",
+  (e) => {
+    if (!e.isTrusted) return;
+    const btn = findSendButton();
+    if (btn && btn.contains(e.target)) reportIfFishCommand();
+  },
+  true
+);
+
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "SEND_CHAT_MESSAGE" && typeof msg.text === "string") {
     typeAndSend(msg.text).then((result) => sendResponse(result));
     return true; // resposta assincrona
+  }
+  if (msg?.type === "TYPE_CHAT_MESSAGE" && typeof msg.text === "string") {
+    typeOnly(msg.text).then((result) => sendResponse(result));
+    return true;
   }
 });

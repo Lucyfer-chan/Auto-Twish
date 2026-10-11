@@ -157,8 +157,20 @@ async function loadState() {
     stateLoading = (async () => {
       const stored = await browser.storage.local.get(["schemaVersion", "general", "channels"]);
       const channels = stored.channels || {};
-      const general = { ...AT.DEFAULT_GENERAL_SETTINGS, ...(stored.general || {}) };
-      let migrated = (stored.schemaVersion || 1) < AT.SCHEMA_VERSION;
+      const general = AT.mergeGeneral(stored.general);
+      const storedVersion = stored.schemaVersion || 1;
+      let migrated = storedVersion < AT.SCHEMA_VERSION;
+
+      // v3: o atraso passou a ter um padrao geral. Canais que estavam no
+      // valor padrao antigo (10s) passam a seguir o geral; outros valores
+      // viram excecao do canal.
+      if (storedVersion < 3) {
+        for (const settings of Object.values(channels)) {
+          if (settings && Number(settings.maxJitterSeconds) === AT.DEFAULT_GENERAL_SETTINGS.defaultMaxJitterSeconds) {
+            settings.maxJitterSeconds = null;
+          }
+        }
+      }
 
       for (const settings of Object.values(channels)) {
         if (settings && LEGACY_ROD_IDS[settings.rod]) {
@@ -186,7 +198,7 @@ async function loadState() {
 browser.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !stateCache) return;
   if (changes.channels) stateCache.channels = changes.channels.newValue || {};
-  if (changes.general) stateCache.general = { ...AT.DEFAULT_GENERAL_SETTINGS, ...(changes.general.newValue || {}) };
+  if (changes.general) stateCache.general = AT.mergeGeneral(changes.general.newValue);
 });
 
 // Copia (pra ninguem alterar o cache sem passar pela fila de escrita).
@@ -225,8 +237,31 @@ function mutateChannels(fn) {
   return run;
 }
 
+// Mesma fila, pras configuracoes gerais.
+function mutateGeneral(fn) {
+  const run = channelsWriteQueue.then(async () => {
+    const state = await loadState();
+    const working = structuredClone(state.general);
+    const out = await fn(working);
+    const merged = AT.mergeGeneral(working);
+    if (JSON.stringify(merged) !== JSON.stringify(state.general)) {
+      state.general = merged;
+      await browser.storage.local.set({ general: merged });
+    }
+    return out;
+  });
+  channelsWriteQueue = run.catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao gravar configuracoes gerais:`, e));
+  return run;
+}
+
+async function getGeneralSettings() {
+  const state = await loadState();
+  return structuredClone(state.general);
+}
+
 function computeJitterMs(settings) {
-  const maxJitterSeconds = clampJitterSeconds(settings.maxJitterSeconds);
+  // Atraso do canal (excecao) ou o padrao geral.
+  const maxJitterSeconds = AT.effectiveJitterSeconds(settings, stateCache && stateCache.general);
   return Math.floor(Math.random() * (maxJitterSeconds * 1000 + 1));
 }
 
@@ -395,20 +430,25 @@ async function recordTwishCooldown(channel, availableAt, explicit = false) {
     }
 
     if (!settings.enabled) return null;
-    if (settings.mode !== "auto" && !explicit) return null; // manual so segue o Twish em sincronizacao explicita
+    if (!AT.followsTwish(settings.mode) && !explicit) return null; // manual so segue o Twish em sincronizacao explicita
 
     const justSent = settings.lastSentAt && now - settings.lastSentAt < JUST_SENT_GUARD_MS;
     const isFreshCooldown = availableAt > now + 3000;
     if (justSent && !isFreshCooldown) return null; // leitura velha logo apos um envio nosso
+    // Semi-automatico esperando o jogador enviar: so um cooldown novo (sinal
+    // de que ele pescou) muda alguma coisa.
+    if (settings.awaitingUser && !isFreshCooldown) return null;
 
     // Mesmo no "mesmo cooldown", corrige o agendamento se ele estiver mais
     // tarde do que o cooldown real permite (ex: estimativa de 10 min da vara
     // depois de um envio que o TwishGameBot nao respondeu, ou agendamento
     // feito antes da aba do Twish ser aberta).
-    const latestAcceptable = Math.max(now, availableAt) + clampJitterSeconds(settings.maxJitterSeconds) * 1000 + 2000;
+    const latestAcceptable =
+      Math.max(now, availableAt) + AT.effectiveJitterSeconds(settings, stateCache && stateCache.general) * 1000 + 2000;
     const scheduleIsWrong = !settings.nextFireAt || settings.nextFireAt > latestAcceptable;
     if (isSameCooldown && !scheduleIsWrong) return null;
 
+    settings.awaitingUser = false; // cooldown novo = o jogador pescou (semi) ou o envio pegou
     settings.nextFireAt = Math.max(now, availableAt) + computeJitterMs(settings);
     return settings.nextFireAt;
   });
@@ -476,31 +516,29 @@ async function attemptSend(channel) {
   return { ok: anyOk, reason: anyOk ? undefined : (reasons[0] || "unknown") };
 }
 
-async function applyChannelSettings(channel, formSettings) {
-  const enabled = !!formSettings.enabled;
-  const mode = formSettings.mode === "auto" ? "auto" : "manual";
+// Aplica uma alteracao (parcial) nas configuracoes de um canal. O popup e a
+// pagina de configuracoes mandam so o que mudou (ex: { mode: "semi" }).
+// Ativar, trocar o modo ou a vara reagenda o proximo envio (com
+// sincronizacao com o Twish); mudar so o atraso nao mexe no agendamento.
+async function applyChannelSettings(channel, patch) {
+  patch = patch || {};
+  const reschedules = ["enabled", "mode", "rod"].some((k) => k in patch);
 
   // Busca dado fresco do Twish (cooldown real E vara equipada) ANTES de
-  // entrar na fila de escrita — a leitura da pagina pode demorar e nao
-  // deve segurar as outras gravacoes. Sincroniza sempre, ativado ou nao,
-  // em qualquer modo.
-  const twish = await syncTwishForChannel(channel);
+  // entrar na fila de escrita — a leitura da pagina pode demorar.
+  const twish = reschedules ? await syncTwishForChannel(channel) : { availableAt: null, rodId: null };
 
   const settings = await mutateChannels((channels) => {
-    const previous = channels[channel] || {};
-    const isActivating = enabled && !previous.enabled; // transicao desativado -> ativado
+    const previous = { ...DEFAULT_CHANNEL_SETTINGS, ...(channels[channel] || {}) };
     const now = Date.now();
+    const s = { ...previous };
 
-    const s = {
-      enabled,
-      rod: formSettings.rod || DEFAULT_ROD,
-      maxJitterSeconds: clampJitterSeconds(formSettings.maxJitterSeconds),
-      mode,
-      twishAvailableAt: previous.twishAvailableAt || null,
-      twishLastSeen: previous.twishLastSeen || null,
-      lastSentAt: previous.lastSentAt || null,
-      nextFireAt: null
-    };
+    if ("enabled" in patch) s.enabled = !!patch.enabled;
+    if ("mode" in patch) s.mode = AT.MODES.includes(patch.mode) ? patch.mode : "manual";
+    if ("rod" in patch) s.rod = AT.ROD_MINUTES[patch.rod] !== undefined ? patch.rod : DEFAULT_ROD;
+    if ("maxJitterSeconds" in patch) {
+      s.maxJitterSeconds = patch.maxJitterSeconds === null ? null : clampJitterSeconds(patch.maxJitterSeconds);
+    }
 
     if (twish.availableAt !== null) {
       s.twishAvailableAt = twish.availableAt;
@@ -510,7 +548,12 @@ async function applyChannelSettings(channel, formSettings) {
       s.rod = twish.rodId; // vara equipada detectada tem prioridade sobre a selecao manual
     }
 
-    if (enabled) {
+    if (!s.enabled) {
+      s.nextFireAt = null;
+      s.awaitingUser = false;
+    } else if (reschedules) {
+      const isActivating = !previous.enabled; // transicao desativado -> ativado
+      s.awaitingUser = false;
       const twishFresh =
         s.twishAvailableAt !== null && s.twishLastSeen && now - s.twishLastSeen < TWISH_DATA_FRESH_MS;
       const availableNow = twishFresh && s.twishAvailableAt <= now + 1000;
@@ -521,8 +564,6 @@ async function applyChannelSettings(channel, formSettings) {
         // disfarcar o ritmo dos envios recorrentes, nao o primeiro).
         s.nextFireAt = now;
       } else if (twishFresh) {
-        // Salvar e uma sincronizacao explicita: usa o cooldown real em
-        // qualquer modo.
         s.nextFireAt = Math.max(now, s.twishAvailableAt) + computeJitterMs(s);
       } else {
         s.nextFireAt = now + computeDelayMs(s);
@@ -534,13 +575,25 @@ async function applyChannelSettings(channel, formSettings) {
   });
 
   await updateHeartbeat();
-  await scheduleDueAlarm(channel, settings.nextFireAt);
+  if (!settings.enabled || reschedules) {
+    await scheduleDueAlarm(channel, settings.nextFireAt);
+  }
+  if (!settings.enabled) clearSemiNotification(channel);
   console.log(
-    `${AT.LOG_PREFIX} Configuracao salva para "${channel}" (modo ${mode}):`,
+    `${AT.LOG_PREFIX} Configuracao de "${channel}" alterada (${Object.keys(patch).join(", ") || "nada"}):`,
     settings,
-    settings.nextFireAt ? `Proximo envio as ${new Date(settings.nextFireAt).toLocaleTimeString()}` : "(desativado)"
+    settings.nextFireAt ? `Proximo envio as ${new Date(settings.nextFireAt).toLocaleTimeString()}` : "(sem envio agendado)"
   );
   return settings;
+}
+
+async function removeChannel(channel) {
+  await mutateChannels((channels) => {
+    delete channels[channel];
+  });
+  await scheduleDueAlarm(channel, null);
+  clearSemiNotification(channel);
+  await updateHeartbeat();
 }
 
 // Grava o resultado de um envio (feito FORA da fila de escrita, porque
@@ -565,6 +618,116 @@ async function recordSendResult(channel, ok) {
   return nextFireAt;
 }
 
+// ---------------------------------------------------------------------------
+// Semi-automatico
+// ---------------------------------------------------------------------------
+
+async function twitchTabsForChannel(channel) {
+  const tabs = await browser.tabs.query({ url: "*://*.twitch.tv/*" });
+  return tabs.filter((t) => extractChannelFromUrl(t.url) === channel);
+}
+
+// So DIGITA o comando no chat (sem enviar). O content.js nao apaga um texto
+// que o jogador esteja escrevendo: nesse caso so avisa.
+async function attemptType(channel) {
+  const targets = await twitchTabsForChannel(channel);
+  if (targets.length === 0) return { ok: false, reason: "no-tab" };
+  let lastReason = "unknown";
+  for (const tab of targets) {
+    try {
+      const result = await browser.tabs.sendMessage(tab.id, { type: "TYPE_CHAT_MESSAGE", text: FIXED_MESSAGE });
+      if (result?.ok) return { ok: true, tab, typed: !!result.typed };
+      lastReason = result?.reason || "unknown";
+    } catch (e) {
+      lastReason = "no-content-script";
+    }
+  }
+  return { ok: false, reason: lastReason };
+}
+
+function semiNotificationId(channel) {
+  return `semi:${channel}`;
+}
+
+function clearSemiNotification(channel) {
+  try {
+    browser.notifications.clear(semiNotificationId(channel));
+  } catch (e) {
+    // sem permissao/suporte: nada a limpar
+  }
+}
+
+async function focusTab(tab) {
+  try {
+    await browser.tabs.update(tab.id, { active: true });
+    await browser.windows.update(tab.windowId, { focused: true });
+  } catch (e) {
+    console.warn(`${AT.LOG_PREFIX} Nao consegui focar a aba da Twitch:`, e);
+  }
+}
+
+// Chama o jogador conforme as opcoes gerais do semi-automatico.
+async function alertUser(channel, tab, typed) {
+  const { semiAuto } = await getGeneralSettings();
+  if (semiAuto.focusTab && tab) await focusTab(tab);
+  if (semiAuto.notify) {
+    try {
+      await browser.notifications.create(semiNotificationId(channel), {
+        type: "basic",
+        title: "Auto Twish — pesca disponível",
+        message: typed
+          ? `${FIXED_MESSAGE} digitado no chat de ${channel}. Aperte Enter para pescar.`
+          : `Pesca disponível em ${channel} (o campo do chat já tinha texto, então não digitei nada).`
+      });
+    } catch (e) {
+      console.warn(`${AT.LOG_PREFIX} Falha ao mostrar notificacao:`, e);
+    }
+  }
+}
+
+async function prepareSemiAuto(channel, source) {
+  const result = await attemptType(channel);
+  const nextFireAt = await mutateChannels((channels) => {
+    const s = channels[channel];
+    if (!s || !s.enabled || s.mode !== "semi") return null;
+    if (result.ok) {
+      s.awaitingUser = true;
+      s.nextFireAt = null; // agora quem manda e o jogador
+    } else {
+      s.nextFireAt = Date.now() + RETRY_DELAY_MS;
+    }
+    return s.nextFireAt;
+  });
+  await scheduleDueAlarm(channel, nextFireAt);
+
+  if (result.ok) {
+    console.log(`${AT.LOG_PREFIX} (${source}) Semi-automatico: "${channel}" pronto, esperando o jogador enviar.`);
+    await alertUser(channel, result.tab, result.typed);
+  } else {
+    console.warn(`${AT.LOG_PREFIX} (${source}) Semi-automatico: falha ao digitar em "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
+  }
+}
+
+// O jogador enviou o comando de pesca por conta propria (Enter ou botao no
+// chat), em qualquer modo: reinicia o ciclo a partir de agora, pra extensao
+// nao mandar outro durante o cooldown. No automatico/semi, o titulo do
+// Twish refina o horario em seguida.
+async function recordUserSent(channel) {
+  const nextFireAt = await mutateChannels((channels) => {
+    const s = channels[channel];
+    if (!s || !s.enabled) return undefined;
+    const now = Date.now();
+    s.awaitingUser = false;
+    s.lastSentAt = now;
+    s.nextFireAt = now + computeDelayMs({ ...DEFAULT_CHANNEL_SETTINGS, ...s });
+    return s.nextFireAt;
+  });
+  if (nextFireAt === undefined) return;
+  clearSemiNotification(channel);
+  await scheduleDueAlarm(channel, nextFireAt);
+  console.log(`${AT.LOG_PREFIX} "${channel}": ${FIXED_MESSAGE} enviado pelo jogador; proximo as ${new Date(nextFireAt).toLocaleTimeString()}.`);
+}
+
 // Ponto unico de disparo, usado tanto pelo alarme dedicado quanto pelo
 // heartbeat. Usa um lock em memoria (inFlightChannels) pra garantir que,
 // mesmo se os dois dispararem quase juntos, so um envio real aconteca.
@@ -579,7 +742,13 @@ async function processChannelIfDue(channel, source) {
     const settings = (await getAllChannelSettings())[channel];
     if (!settings || !settings.enabled) return;
 
+    if (settings.awaitingUser) return; // semi: ja digitado, esperando o jogador
     if (settings.nextFireAt && Date.now() < settings.nextFireAt) return; // ainda nao esta na hora
+
+    if (settings.mode === "semi") {
+      await prepareSemiAuto(channel, source);
+      return;
+    }
 
     const result = await attemptSend(channel);
     const nextFireAt = await recordSendResult(channel, result.ok);
@@ -685,6 +854,45 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg?.type === "GET_ALL_STATE") {
+    (async () => {
+      const general = await getGeneralSettings();
+      const raw = await getAllChannelSettings();
+      const channels = {};
+      for (const [name, s] of Object.entries(raw)) channels[name] = { ...DEFAULT_CHANNEL_SETTINGS, ...s };
+      sendResponse({ general, channels });
+    })();
+    return true;
+  }
+
+  if (msg?.type === "UPDATE_GENERAL_SETTINGS") {
+    (async () => {
+      const patch = msg.patch || {};
+      await mutateGeneral((g) => {
+        if ("defaultMaxJitterSeconds" in patch) g.defaultMaxJitterSeconds = clampJitterSeconds(patch.defaultMaxJitterSeconds);
+        if (patch.semiAuto) {
+          g.semiAuto = { ...g.semiAuto };
+          if ("focusTab" in patch.semiAuto) g.semiAuto.focusTab = !!patch.semiAuto.focusTab;
+          if ("notify" in patch.semiAuto) g.semiAuto.notify = !!patch.semiAuto.notify;
+        }
+      });
+      sendResponse({ general: await getGeneralSettings() });
+    })();
+    return true;
+  }
+
+  if (msg?.type === "REMOVE_CHANNEL") {
+    removeChannel(msg.channel).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  // Vem do content.js: o jogador enviou o comando de pesca manualmente.
+  if (msg?.type === "USER_SENT_COMMAND") {
+    const channel = extractChannelFromUrl(sender?.tab?.url || "");
+    if (channel && msg.text === FIXED_MESSAGE) recordUserSent(channel);
+    return false;
+  }
+
   if (msg?.type === "UPDATE_CHANNEL_SETTINGS") {
     applyChannelSettings(msg.channel, msg.settings).then((settings) => sendResponse({ ok: true, settings }));
     return true;
@@ -699,6 +907,16 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 });
+
+if (browser.notifications && browser.notifications.onClicked) {
+  browser.notifications.onClicked.addListener(async (id) => {
+    if (!id.startsWith("semi:")) return;
+    const channel = id.slice(5);
+    const [tab] = await twitchTabsForChannel(channel);
+    if (tab) await focusTab(tab);
+    browser.notifications.clear(id);
+  });
+}
 
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEARTBEAT_NAME) {

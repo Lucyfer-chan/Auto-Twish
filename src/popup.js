@@ -1,163 +1,138 @@
-const enabledEl = document.getElementById("enabled");
-const modeEl = document.getElementById("mode");
-const rodEl = document.getElementById("rod");
-const jitterEl = document.getElementById("jitter");
-const jitterValueEl = document.getElementById("jitterValue");
-const channelLabelEl = document.getElementById("channelLabel");
-const twishStatusEl = document.getElementById("twishStatus");
-const saveBtn = document.getElementById("save");
-const testBtn = document.getElementById("testNow");
-const statusEl = document.getElementById("status");
-const countdownEl = document.getElementById("countdown");
-const checkingEl = document.getElementById("checking");
+// popup.js — popup reduzido: so o essencial do canal da aba ativa.
+// Tudo e aplicado na hora (sem botao "Salvar"). O resto fica na pagina de
+// configuracoes.
 
-// Constantes compartilhadas com o background (shared.js).
-const HEARTBEAT_NAME = AT.HEARTBEAT_NAME;
-const DEFAULT_JITTER_SECONDS = AT.DEFAULT_MAX_JITTER_SECONDS;
-const DEFAULT_ROD = AT.DEFAULT_ROD;
-const TWISH_FRESH_MS = AT.TWISH_DATA_FRESH_MS;
+const $ = (id) => document.getElementById(id);
+const enabledEl = $("enabled");
+const modeEl = $("mode");
+const modeButtons = [...modeEl.querySelectorAll("button[data-mode]")];
+const modeHintEl = $("modeHint");
+const rodFieldEl = $("rodField");
+const rodEl = $("rod");
+const channelLabelEl = $("channelLabel");
+const twishStatusEl = $("twishStatus");
+const statusEl = $("status");
+const countdownEl = $("countdown");
+const checkingEl = $("checking");
 
-// Mostra a versao (do manifest) no titulo do popup, no formato "v 0.XX.YYY".
-document.getElementById("version").textContent = `v ${browser.runtime.getManifest().version}`;
+const MODE_HINTS = {
+  manual: "Envia sozinho pelo tempo da vara + atraso. O Twish só é lido ao abrir o popup ou mudar algo.",
+  auto: "Envia sozinho, seguindo o cooldown real da aba do Twish.",
+  semi: "Quando o CD zera, digita o comando no chat e te chama — você aperta Enter."
+};
+
+$("version").textContent = `v ${browser.runtime.getManifest().version}`;
+for (const rod of AT.ROD_DEFS) {
+  const opt = document.createElement("option");
+  opt.value = rod.id;
+  opt.textContent = `${rod.name} — ${rod.minutes} min`;
+  rodEl.appendChild(opt);
+}
 
 let currentChannel = null;
-let mainTarget = null; // nextFireAt do canal atual (ou null se desativado)
-let heartbeatTarget = null; // scheduledTime do alarme de heartbeat (ou null)
+let current = null; // configuracoes do canal atual (como estao no background)
+let heartbeatTarget = null;
 let renderTimer = null;
+let lastTwishSync = null; // { found, availableAt, rodId, at }
 
-async function getActiveTabUrl() {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  return tab?.url || "";
+// ---------------------------------------------------------------------------
+// Desenho
+// ---------------------------------------------------------------------------
+
+function setControlsEnabled(on) {
+  enabledEl.disabled = !on;
+  rodEl.disabled = !on;
+  for (const b of modeButtons) b.disabled = !on;
 }
 
-function setFormEnabled(isEnabled) {
-  enabledEl.disabled = !isEnabled;
-  modeEl.disabled = !isEnabled;
-  rodEl.disabled = !isEnabled;
-  jitterEl.disabled = !isEnabled;
-  saveBtn.disabled = !isEnabled;
-  testBtn.disabled = !isEnabled;
+function renderSettings() {
+  const s = current || AT.DEFAULT_CHANNEL_SETTINGS;
+  enabledEl.checked = !!s.enabled;
+  for (const b of modeButtons) b.setAttribute("aria-checked", String(b.dataset.mode === s.mode));
+  modeHintEl.textContent = MODE_HINTS[s.mode] || "";
+  rodFieldEl.hidden = s.mode !== "manual"; // a vara so aparece no modo manual
+  rodEl.value = s.rod || AT.DEFAULT_ROD;
+  renderCountdown();
 }
 
-const formatRemaining = AT.formatRemaining; // "mm:ss", sem milissegundos
+function renderCountdown() {
+  const s = current;
+  checkingEl.textContent = "";
+  if (!s || !s.enabled) {
+    countdownEl.className = "countdown muted";
+    countdownEl.textContent = currentChannel ? "Desativado — nenhum envio agendado." : "—";
+    return;
+  }
+  if (s.awaitingUser) {
+    countdownEl.className = "countdown waiting";
+    countdownEl.textContent = `Pesca disponível — envie o ${AT.FISH_COMMAND} no chat`;
+    return;
+  }
+  if (!s.nextFireAt) {
+    countdownEl.className = "countdown muted";
+    countdownEl.textContent = "Nenhum envio agendado.";
+    return;
+  }
 
-let lastTwishSync = null; // resultado da ultima sincronizacao explicita ({ found, availableAt, rodId, at })
+  countdownEl.className = "countdown";
+  const remaining = s.nextFireAt - Date.now();
+  if (remaining > 0) {
+    const verb = s.mode === "semi" ? "Próximo aviso" : "Próximo envio";
+    countdownEl.textContent = `${verb} em: ${AT.formatRemaining(remaining)}`;
+    return;
+  }
+
+  countdownEl.textContent = s.mode === "semi" ? "Preparando o aviso…" : "Próximo envio: agora…";
+  if (heartbeatTarget && heartbeatTarget > Date.now()) {
+    checkingEl.textContent = `Rede de segurança (fallback) em: ${AT.formatRemaining(heartbeatTarget - Date.now())}`;
+  } else {
+    refreshHeartbeatTarget();
+  }
+}
 
 function formatClock(ms) {
   const total = Math.max(0, Math.ceil(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-// Mostra, em qualquer modo, se a aba do Twish desse canal foi encontrada
-// na ultima sincronizacao e o que foi lido dela.
-function renderTwishStatus(settings) {
+// Mostra se a aba do Twish desse canal foi encontrada na ultima
+// sincronizacao e o que foi lido dela.
+function renderTwishStatus() {
   const sync = lastTwishSync;
-  if (sync && sync.found) {
-    let what;
-    if (sync.availableAt === null) {
-      what = "aba encontrada, mas o título não foi reconhecido";
-    } else if (sync.availableAt <= sync.at + 1000) {
-      what = "pesca disponível";
-    } else {
-      what = `cooldown de ${formatClock(sync.availableAt - sync.at)} no momento da leitura`;
-    }
-    const rod = sync.rodId ? "vara detectada" : "vara não detectada";
-    if (sync.availableAt === null) {
-      // Achou a aba mas nao entendeu o titulo: avisa (nao e sincronizacao de verdade).
-      twishStatusEl.textContent = `Twish: ${what} — usando a estimativa da vara; ${rod}.`;
-      twishStatusEl.className = "hint stale";
-    } else {
-      twishStatusEl.textContent = `Twish: sincronizado — ${what}; ${rod}.`;
-      twishStatusEl.className = "hint ok";
-    }
+  if (!currentChannel) {
+    twishStatusEl.textContent = "";
     return;
   }
-
-  if (sync && !sync.found) {
-    twishStatusEl.textContent = "Twish: nenhuma aba aberta para este canal. Abra a página de inventário do Twish desse canal" +
-      (modeEl.value === "auto" ? " — até lá, o modo automático usa a estimativa da vara." : ".");
+  if (!sync) {
+    twishStatusEl.textContent = "Twish: sincronizando…";
+    twishStatusEl.className = "hint";
+    return;
+  }
+  if (!sync.found) {
+    twishStatusEl.textContent =
+      "Twish: nenhuma aba aberta para este canal. Abra a página de inventário do Twish desse canal" +
+      (current && AT.followsTwish(current.mode) ? " — até lá, vale a estimativa da vara." : ".");
     twishStatusEl.className = "hint stale";
     return;
   }
 
-  // Ainda sem sincronizacao explicita nesta abertura do popup.
-  const lastSeen = settings?.twishLastSeen;
-  if (lastSeen && Date.now() - lastSeen < TWISH_FRESH_MS) {
-    twishStatusEl.textContent = "Twish: sincronizando…";
-    twishStatusEl.className = "hint ok";
-  } else {
-    twishStatusEl.textContent = "Twish: sincronizando…";
-    twishStatusEl.className = "hint";
-  }
-}
-
-function stopTicking() {
-  if (renderTimer) {
-    clearTimeout(renderTimer);
-    renderTimer = null;
-  }
-}
-
-// Pede ao background pra buscar dado fresco na aba do Twish agora mesmo
-// (cooldown real + vara equipada), em vez de esperar passivamente a
-// proxima mudanca de titulo. Aplica o resultado nos campos do formulario
-// quando ha algo novo. Retorna as settings atualizadas (ou null).
-async function syncTwish() {
-  if (!currentChannel) return null;
-  try {
-    const { settings, twish } = await browser.runtime.sendMessage({
-      type: "SYNC_TWISH_FOR_CHANNEL",
-      channel: currentChannel
-    });
-    lastTwishSync = twish ? { ...twish, at: Date.now() } : null;
-
-    if (settings) {
-      modeEl.dataset.twishLastSeen = settings.twishLastSeen || "";
-      if (settings.rod) rodEl.value = settings.rod;
-      mainTarget = settings.enabled ? settings.nextFireAt : mainTarget;
-    } else if (twish?.rodId) {
-      // Canal ainda nao salvo: so pre-seleciona a vara detectada no formulario.
-      rodEl.value = twish.rodId;
-    }
-    renderTwishStatus(settings);
-    return settings;
-  } catch (e) {
-    return null;
-  }
-}
-
-// So redesenha o texto a partir dos valores em cache (mainTarget/heartbeatTarget).
-function renderCountdowns() {
-  if (!mainTarget) {
-    countdownEl.className = "muted";
-    countdownEl.textContent = "Desativado — nenhum envio agendado.";
-    checkingEl.textContent = "";
+  const rod = sync.rodId ? "vara detectada" : "vara não detectada";
+  if (sync.availableAt === null) {
+    twishStatusEl.textContent = `Twish: aba encontrada, mas o título não foi reconhecido — usando a estimativa da vara; ${rod}.`;
+    twishStatusEl.className = "hint stale";
     return;
   }
-
-  countdownEl.className = "";
-  const remaining = mainTarget - Date.now();
-
-  if (remaining > 0) {
-    countdownEl.textContent = `Próximo envio em: ${formatRemaining(remaining)}`;
-    checkingEl.textContent = "";
-    return;
-  }
-
-  // Cooldown esgotado: o alarme dedicado do canal dispara quase na hora;
-  // esse texto aparece so por um instante, ate o envio ser registrado.
-  countdownEl.textContent = "Próximo envio: agora…";
-  if (heartbeatTarget && heartbeatTarget > Date.now()) {
-    checkingEl.textContent = `Rede de segurança (fallback) em: ${formatRemaining(heartbeatTarget - Date.now())}`;
-  } else {
-    checkingEl.textContent = "";
-    refreshHeartbeatTarget(); // horario do heartbeat ja passou; busca o proximo
-  }
+  const what =
+    sync.availableAt <= sync.at + 1000
+      ? "pesca disponível"
+      : `cooldown de ${formatClock(sync.availableAt - sync.at)} no momento da leitura`;
+  twishStatusEl.textContent = `Twish: sincronizado — ${what}; ${rod}.`;
+  twishStatusEl.className = "hint ok";
 }
 
 async function refreshHeartbeatTarget() {
   try {
-    const alarm = await browser.alarms.get(HEARTBEAT_NAME);
+    const alarm = await browser.alarms.get(AT.HEARTBEAT_NAME);
     heartbeatTarget = alarm ? alarm.scheduledTime : null;
   } catch (e) {
     heartbeatTarget = null;
@@ -166,101 +141,130 @@ async function refreshHeartbeatTarget() {
 
 // Redesenha 1x por segundo, alinhado na virada do segundo do contador.
 function startTicking() {
-  stopTicking();
+  if (renderTimer) clearTimeout(renderTimer);
   const tick = () => {
-    renderCountdowns();
-    const msToNextSecond = mainTarget ? ((mainTarget - Date.now()) % 1000 + 1000) % 1000 || 1000 : 1000;
-    renderTimer = setTimeout(tick, msToNextSecond + 5);
+    renderCountdown();
+    const target = current && current.nextFireAt;
+    const ms = target ? ((target - Date.now()) % 1000 + 1000) % 1000 || 1000 : 1000;
+    renderTimer = setTimeout(tick, ms + 5);
   };
   tick();
 }
 
-// Em vez de perguntar ao background a cada segundo, o popup e avisado
-// quando as configuracoes mudam (envio feito, reagendamento, etc.).
+// ---------------------------------------------------------------------------
+// Comunicacao com o background
+// ---------------------------------------------------------------------------
+
+// Busca dado fresco na aba do Twish (cooldown real + vara equipada).
+async function syncTwish() {
+  if (!currentChannel) return;
+  try {
+    const { settings, twish } = await browser.runtime.sendMessage({
+      type: "SYNC_TWISH_FOR_CHANNEL",
+      channel: currentChannel
+    });
+    lastTwishSync = twish ? { ...twish, at: Date.now() } : null;
+    if (settings) {
+      current = settings;
+    } else if (twish?.rodId) {
+      // Canal ainda nao salvo: so pre-seleciona a vara detectada.
+      current = { ...(current || AT.DEFAULT_CHANNEL_SETTINGS), rod: twish.rodId };
+    }
+    renderSettings();
+    renderTwishStatus();
+  } catch (e) {
+    // falha pontual; o status fica como esta
+  }
+}
+
+// Manda so o que mudou; o background aplica e devolve o estado novo.
+async function update(patch) {
+  if (!currentChannel) return;
+  setControlsEnabled(false);
+  try {
+    const { settings } = await browser.runtime.sendMessage({
+      type: "UPDATE_CHANNEL_SETTINGS",
+      channel: currentChannel,
+      settings: patch
+    });
+    current = settings;
+    renderSettings();
+    statusEl.textContent = settings.enabled ? "Aplicado." : "Aplicado (desativado).";
+  } catch (e) {
+    statusEl.textContent = "Falha ao aplicar a alteração.";
+  } finally {
+    setControlsEnabled(true);
+  }
+  syncTwish(); // atualiza a linha de status do Twish
+}
+
+// O popup e avisado quando algo muda (envio feito, reagendamento...), em
+// vez de perguntar ao background a cada segundo.
 browser.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !changes.channels || !currentChannel) return;
   const s = (changes.channels.newValue || {})[currentChannel];
-  mainTarget = s && s.enabled ? s.nextFireAt : null;
-  renderCountdowns();
+  if (s) {
+    current = { ...AT.DEFAULT_CHANNEL_SETTINGS, ...s };
+    renderSettings();
+  }
 });
 
-jitterEl.addEventListener("input", () => {
-  jitterValueEl.textContent = `${jitterEl.value}s`;
-});
+// ---------------------------------------------------------------------------
+// Eventos da interface
+// ---------------------------------------------------------------------------
 
-modeEl.addEventListener("change", async () => {
-  await syncTwish(); // sincroniza ao trocar pra qualquer modo
-});
+enabledEl.addEventListener("change", () => update({ enabled: enabledEl.checked }));
+
+for (const b of modeButtons) {
+  b.addEventListener("click", () => {
+    if (current && current.mode === b.dataset.mode) return;
+    update({ mode: b.dataset.mode });
+  });
+}
+
+rodEl.addEventListener("change", () => update({ rod: rodEl.value }));
+
+const openOptions = () => {
+  browser.runtime.openOptionsPage();
+  window.close();
+};
+$("openOptions").addEventListener("click", openOptions);
+$("gear").addEventListener("click", openOptions);
+
+async function getActiveTabUrl() {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  return tab?.url || "";
+}
 
 async function load() {
   const url = await getActiveTabUrl();
-  const { channel, settings } = await browser.runtime.sendMessage({
-    type: "GET_SETTINGS_FOR_ACTIVE_TAB",
-    url
-  });
+  const { channel, settings } = await browser.runtime.sendMessage({ type: "GET_SETTINGS_FOR_ACTIVE_TAB", url });
   currentChannel = channel;
 
   if (!channel) {
     channelLabelEl.textContent = "Abra a aba de um canal da Twitch (ex: twitch.tv/seucanal) para configurar.";
     channelLabelEl.classList.add("muted");
-    setFormEnabled(false);
-    mainTarget = null;
-    heartbeatTarget = null;
+    setControlsEnabled(false);
+    current = null;
+    renderSettings();
     startTicking();
     return;
   }
 
-  channelLabelEl.innerHTML = `Canal detectado: <strong>${channel}</strong>`;
+  channelLabelEl.innerHTML = "";
+  channelLabelEl.append("Canal detectado: ");
+  const strong = document.createElement("strong");
+  strong.textContent = channel;
+  channelLabelEl.append(strong);
   channelLabelEl.classList.remove("muted");
-  setFormEnabled(true);
+  setControlsEnabled(true);
 
-  enabledEl.checked = !!settings.enabled;
-  modeEl.value = settings.mode || "manual";
-  modeEl.dataset.twishLastSeen = settings.twishLastSeen || "";
-  rodEl.value = settings.rod || DEFAULT_ROD;
-  jitterEl.value = settings.maxJitterSeconds || DEFAULT_JITTER_SECONDS;
-  jitterValueEl.textContent = `${jitterEl.value}s`;
-  renderTwishStatus(settings);
-
-  mainTarget = settings.enabled ? settings.nextFireAt : null;
+  current = settings;
+  renderSettings();
+  renderTwishStatus();
   await refreshHeartbeatTarget();
   startTicking();
-
-  // Busca dado fresco do Twish assim que o popup abre, em vez de esperar
-  // passivamente a proxima mudanca de titulo da aba.
-  await syncTwish();
+  await syncTwish(); // le o Twish assim que o popup abre
 }
-
-function currentSettingsFromForm() {
-  return {
-    enabled: enabledEl.checked,
-    mode: modeEl.value,
-    rod: rodEl.value,
-    maxJitterSeconds: Number(jitterEl.value)
-  };
-}
-
-saveBtn.addEventListener("click", async () => {
-  if (!currentChannel) return;
-  const settings = currentSettingsFromForm();
-  await browser.runtime.sendMessage({
-    type: "UPDATE_CHANNEL_SETTINGS",
-    channel: currentChannel,
-    settings
-  });
-  statusEl.textContent = settings.enabled
-    ? `Salvo para ${currentChannel}.`
-    : `Salvo para ${currentChannel} (desativado).`;
-  await load();
-});
-
-testBtn.addEventListener("click", async () => {
-  if (!currentChannel) return;
-  const result = await browser.runtime.sendMessage({ type: "SEND_NOW", channel: currentChannel });
-  statusEl.textContent = result?.ok
-    ? "Disparado. Confira o chat."
-    : `Falha ao enviar (${result?.reason || "motivo desconhecido"}). Veja o console da aba da Twitch.`;
-  await load();
-});
 
 load();
