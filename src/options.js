@@ -71,8 +71,100 @@ function mountSellEditor(host, save) {
   };
 }
 
+// Especies do jogo para a protecao (nome -> id), lidas do bestiario.
+let protectBestiary = [];
+async function loadProtectBestiary() {
+  try {
+    const { list } = await browser.runtime.sendMessage({ type: "GET_BESTIARY" });
+    protectBestiary = Array.isArray(list) ? list : [];
+  } catch (e) {
+    protectBestiary = [];
+  }
+  const dl = $("protectFishOptions");
+  dl.innerHTML = "";
+  for (const f of protectBestiary) {
+    const o = document.createElement("option");
+    o.value = f.name;
+    dl.appendChild(o);
+  }
+}
+function norm(t) {
+  return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+}
+// Aceita o nome (com ou sem acento) ou o id do jogo (ex: aruana_asiatica).
+function resolveFish(text) {
+  const n = norm(text);
+  if (!n) return null;
+  const hit = protectBestiary.find((f) => norm(f.name) === n || f.id === n);
+  if (hit) return { id: hit.id, name: hit.name };
+  const id = n.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!protectBestiary.length && AT.FISH_ID_RE.test(id)) return { id, name: text.trim() }; // sem bestiario: aceita pelo formato do id
+  return null;
+}
+
+function mountProtectEditor(host, save) {
+  const root = $("protectTemplate").content.firstElementChild.cloneNode(true);
+  host.appendChild(root);
+  const q = (sel) => root.querySelector(sel);
+  const enabled = q(".js-protect-enabled");
+  const chips = q(".js-protect-chips");
+  const input = q(".js-protect-input");
+  const add = q(".js-protect-add");
+  const error = q(".js-protect-error");
+  let cfg = AT.sanitizeProtection(null);
+  enabled.addEventListener("change", () => save({ enabled: enabled.checked }));
+  function addFish() {
+    const f = resolveFish(input.value);
+    if (!f) {
+      error.textContent = "Espécie não encontrada — escolha um nome da lista de sugestões.";
+      return;
+    }
+    if (cfg.fish.some((x) => x.id === f.id)) {
+      error.textContent = `${f.name} já está na lista.`;
+      return;
+    }
+    error.textContent = "";
+    input.value = "";
+    save({ fish: [...cfg.fish, f] });
+  }
+  add.addEventListener("click", addFish);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addFish();
+    }
+  });
+  return function render(next) {
+    cfg = AT.sanitizeProtection(next);
+    enabled.checked = cfg.enabled;
+    chips.innerHTML = "";
+    if (!cfg.fish.length) {
+      const e = document.createElement("span");
+      e.className = "chips-empty";
+      e.textContent = "Nenhuma espécie na lista.";
+      chips.appendChild(e);
+    }
+    for (const f of cfg.fish) {
+      const c = document.createElement("span");
+      c.className = "chip";
+      c.title = `id no jogo: ${f.id}`;
+      c.textContent = f.name;
+      const x = document.createElement("button");
+      x.type = "button";
+      x.textContent = "×";
+      x.title = `Tirar ${f.name} da lista (não remove do jogo)`;
+      x.setAttribute("aria-label", x.title);
+      x.addEventListener("click", () => save({ fish: cfg.fish.filter((y) => y.id !== f.id) }));
+      c.appendChild(x);
+      chips.appendChild(c);
+    }
+  };
+}
+
 const renderGeneralDuel = mountDuelEditor($("generalDuel"), (patch) => updateGeneral({ duelAccept: patch }));
 const renderGeneralSell = mountSellEditor($("generalSell"), (patch) => updateGeneral({ turboSell: patch }));
+const renderGeneralProtect = mountProtectEditor($("generalProtect"), (patch) => updateGeneral({ protection: patch }));
+let gameState = {};
 
 $("version").textContent = `v ${browser.runtime.getManifest().version}`;
 
@@ -93,6 +185,7 @@ function renderGeneral() {
   notifyAutomationsEl.checked = !!g.notifyAutomations;
   renderGeneralDuel(g.duelAccept);
   renderGeneralSell(g.turboSell);
+  renderGeneralProtect(g.protection);
   $("loginInfo").textContent = g.twishLogin ? `conta reconhecida: ${g.twishLogin}` : "ainda não lida (abra o popup num canal estando logado no twish.com.br)";
 }
 
@@ -157,8 +250,23 @@ function createCard(name) {
     duelHost: q(".js-duel-host"),
     sellDefault: q(".js-sell-default"),
     sellSummary: q(".js-sell-summary"),
-    sellHost: q(".js-sell-host")
+    sellHost: q(".js-sell-host"),
+    protectDefault: q(".js-protect-default"),
+    protectSummary: q(".js-protect-summary"),
+    protectHost: q(".js-protect-host"),
+    protectStatusRow: q(".js-protect-status-row"),
+    protectStatus: q(".js-protect-status"),
+    protectCheck: q(".js-protect-check")
   };
+  els.renderProtect = mountProtectEditor(els.protectHost, (patch) => updateChannel(name, { protection: patch }));
+  els.protectDefault.addEventListener("change", () => updateChannel(name, { protection: els.protectDefault.checked ? null : {} }));
+  els.protectCheck.addEventListener("click", async () => {
+    els.protectCheck.disabled = true;
+    els.protectStatus.textContent = "Conferindo…";
+    await browser.runtime.sendMessage({ type: "SYNC_PROTECTION_NOW", channel: name });
+    els.protectCheck.disabled = false;
+    renderProtectStatus(name);
+  });
   // Excecoes de automacao: desmarcar "usar o padrao geral" cria uma copia do
   // padrao atual para este canal; marcar de novo apaga a excecao.
   els.renderDuel = mountDuelEditor(els.duelHost, (patch) => updateChannel(name, { duelAccept: patch }));
@@ -258,8 +366,27 @@ function renderCard(name) {
   els.sellSummary.textContent = AT.describeTurboSell(AT.sanitizeTurboSell(g.turboSell));
   els.sellHost.hidden = !s.turboSell;
   if (s.turboSell) els.renderSell(s.turboSell);
+  els.protectDefault.checked = !s.protection;
+  els.protectSummary.textContent = AT.describeProtection(AT.sanitizeProtection(g.protection));
+  els.protectHost.hidden = !s.protection;
+  if (s.protection) els.renderProtect(s.protection);
+  renderProtectStatus(name);
 
   renderClock(name);
+}
+
+function renderProtectStatus(name) {
+  const card = cards.get(name);
+  const s = state.channels[name];
+  if (!card || !s) return;
+  const cfg = AT.effectiveProtection(s, state.general);
+  const active = cfg.enabled && cfg.fish.length > 0;
+  card.els.protectStatusRow.hidden = !active;
+  if (!active) return;
+  const w = (gameState[name] || {}).whitelist;
+  card.els.protectStatus.textContent = w && w.checkedAt
+    ? `${w.lastMsg || ""} Conferido às ${new Date(w.checkedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`
+    : "Ainda não conferido.";
 }
 
 function renderClock(name) {
@@ -306,6 +433,12 @@ function renderChannels() {
 
 async function loadState() {
   state = await browser.runtime.sendMessage({ type: "GET_ALL_STATE" });
+  try {
+    gameState = (await browser.storage.local.get("gameState")).gameState || {};
+  } catch (e) {
+    gameState = {};
+  }
+  loadProtectBestiary();
   renderGeneral();
   renderChannels();
 }
@@ -316,6 +449,10 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (changes.general) {
     state.general = AT.mergeGeneral(changes.general.newValue);
     renderGeneral();
+  }
+  if (changes.gameState) {
+    gameState = changes.gameState.newValue || {};
+    for (const name of cards.keys()) renderProtectStatus(name);
   }
   if (changes.channels) {
     const next = changes.channels.newValue || {};

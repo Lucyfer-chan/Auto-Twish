@@ -66,6 +66,12 @@ AT.DEFAULT_GENERAL_SETTINGS = {
     enabled: false, // Venda Turbinada: $vender todos perto do fim do evento
     secondsBeforeEnd: 30
   },
+  // Protecao automatica (Road Map item 7): mantem estas especies na whitelist
+  // do jogo ($whitelist) em cada barco. So adiciona; nunca remove.
+  protection: {
+    enabled: false,
+    fish: [] // [{ id, name }]
+  },
   semiAuto: {
     focusTab: true, // ao digitar, traz a aba (e a janela) da Twitch pra frente
     notify: true // mostra notificacao do sistema
@@ -140,6 +146,34 @@ AT.duelAcceptDecision = function (cfg, { remainingMs, fullMs }) {
   return { accept: pct >= cfg.pct, why: `faltam ${pct}% do CD da pesca (mínimo ${cfg.pct}%)` };
 };
 
+// Id de especie do jogo: minusculas, numeros e "_" (ex: aruana_asiatica).
+AT.FISH_ID_RE = /^[a-z0-9_]{1,60}$/;
+AT.PROTECT_MAX_FISH = 100;
+AT.WHITELIST_COMMAND = "$whitelist";
+
+AT.sanitizeProtection = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  const seen = new Set();
+  const fish = [];
+  for (const f of Array.isArray(o.fish) ? o.fish : []) {
+    const id = f && typeof f.id === "string" ? f.id.trim().toLowerCase() : "";
+    if (!AT.FISH_ID_RE.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    fish.push({ id, name: typeof f.name === "string" && f.name.trim() ? f.name.trim().slice(0, 60) : id });
+    if (fish.length >= AT.PROTECT_MAX_FISH) break;
+  }
+  return { enabled: !!o.enabled, fish };
+};
+AT.effectiveProtection = function (channelSettings, general) {
+  const own = channelSettings && channelSettings.protection;
+  return AT.sanitizeProtection(own || (general || AT.DEFAULT_GENERAL_SETTINGS).protection);
+};
+AT.describeProtection = function (cfg) {
+  const n = cfg.fish.length;
+  if (!cfg.enabled) return n ? `desligado, ${n} espécie${n === 1 ? "" : "s"} na lista` : "desligado";
+  return `ligado, ${n} espécie${n === 1 ? "" : "s"}`;
+};
+
 AT.describeDuelAccept = function (cfg) {
   if (!cfg.enabled) return "desligado";
   if (cfg.rule === "always") return "ligado, sempre";
@@ -159,6 +193,7 @@ AT.mergeGeneral = function (saved) {
     semiAuto: { ...AT.DEFAULT_GENERAL_SETTINGS.semiAuto, ...(g.semiAuto || {}) },
     duelAccept: AT.sanitizeDuelAccept(g.duelAccept),
     turboSell: AT.sanitizeTurboSell(g.turboSell),
+    protection: AT.sanitizeProtection(g.protection),
     market: { ...AT.DEFAULT_GENERAL_SETTINGS.market, ...(g.market || {}) }
   };
 };
@@ -173,6 +208,7 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   notifyEvents: false, // notificacao quando comeca um evento neste canal
   duelAccept: null, // null = usa o valor geral; objeto = excecao deste canal
   turboSell: null, // idem
+  protection: null, // idem
   twishAvailableAt: null, // ultimo horario real de disponibilidade lido do Twish
   twishLastSeen: null, // quando essa leitura foi feita (gravado no maximo 1x/min durante o mesmo cooldown)
   lastSentAt: null, // ultimo envio local bem-sucedido

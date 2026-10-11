@@ -264,6 +264,62 @@
   .auto-override .auto-fields {
     margin-left: 0;
   }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 4px 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-sunken);
+    font-size: 12px;
+  }
+  .chip button {
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 6px;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .chip button:hover {
+    color: var(--danger);
+  }
+  .chips-empty {
+    font-size: 12px;
+    color: var(--text-faint);
+  }
+  .add-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .add-row .acq-field {
+    flex: 1;
+    min-width: 200px;
+  }
+  .protect-status {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 6px 0 0 26px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .btn.small {
+    padding: 3px 8px;
+    font-size: 11px;
+  }
   @media (max-width: 560px) {
     .channel-grid {
       grid-template-columns: 1fr;
@@ -330,6 +386,7 @@
     <div class="hint" style="margin-top:0">Tudo começa desligado. Cada canal pode ter uma exceção própria (no cartão do canal, abaixo). Os comandos são enviados no chat da Twitch — a aba do canal precisa estar aberta — um por vez, com intervalo aleatório entre eles, e param durante a verificação do Twish.</div>
     <div id="generalDuel" class="setting"></div>
     <div id="generalSell" class="setting"></div>
+    <div id="generalProtect" class="setting"></div>
     <div class="setting">
       <label class="check-row" style="margin-top:0">
         <input type="checkbox" id="notifyAutomations" />
@@ -477,6 +534,15 @@
         <span>Venda Turbinada: usar o padrão geral <span class="hint">(<span class="js-sell-summary"></span>)</span></span>
       </label>
       <div class="auto-override js-sell-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-protect-default" />
+        <span>Proteção: usar o padrão geral <span class="hint">(<span class="js-protect-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-protect-host"></div>
+      <div class="protect-status js-protect-status-row">
+        <span class="js-protect-status"></span>
+        <button type="button" class="btn secondary small js-protect-check">Conferir agora</button>
+      </div>
     </div>
 
     <div class="setting">
@@ -538,6 +604,29 @@
     </div>
   </div>
 </template>
+
+<template id="protectTemplate">
+  <div class="auto-block">
+    <label class="check-row" style="margin-top:0">
+      <input type="checkbox" class="js-protect-enabled" />
+      <span><strong>Proteção automática</strong> <span class="hint">($whitelist)</span>
+        <span class="hint" style="display:block">Mantém estas espécies na whitelist do jogo em cada barco (a whitelist do Twish é por canal), para a venda em massa e a autovenda não venderem. A extensão confere pela sua conta e só manda o que estiver faltando — a cada 30 min, ao mudar a lista e logo antes da Venda Turbinada. Tirar uma espécie daqui não a remove do jogo (use $whitelistremove).</span>
+      </span>
+    </label>
+    <div class="js-protect-fields" style="margin-left:26px">
+      <div class="chips js-protect-chips"></div>
+      <div class="add-row">
+        <div class="acq-field">
+          <label>Espécie</label>
+          <input type="text" list="protectFishOptions" autocomplete="off" class="js-protect-input" placeholder="comece a digitar o nome (ex: aruanã)" />
+          <div class="field-hint js-protect-error"></div>
+        </div>
+        <button type="button" class="btn secondary js-protect-add">Adicionar à proteção</button>
+      </div>
+    </div>
+  </div>
+</template>
+<datalist id="protectFishOptions"></datalist>
 
 <script src="browser-polyfill.js"></script>
 <script src="shared.js"></script>

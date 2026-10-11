@@ -708,6 +708,9 @@ async function applyChannelSettings(channel, patch) {
     if ("duelAccept" in patch) {
       s.duelAccept = patch.duelAccept === null ? null : AT.sanitizeDuelAccept({ ...AT.effectiveDuelAccept(previous, stateCache && stateCache.general), ...patch.duelAccept });
     }
+    if ("protection" in patch) {
+      s.protection = patch.protection === null ? null : AT.sanitizeProtection({ ...AT.effectiveProtection(previous, stateCache && stateCache.general), ...patch.protection });
+    }
     if ("turboSell" in patch) {
       s.turboSell = patch.turboSell === null ? null : AT.sanitizeTurboSell({ ...AT.effectiveTurboSell(previous, stateCache && stateCache.general), ...patch.turboSell });
     }
@@ -753,6 +756,7 @@ async function applyChannelSettings(channel, patch) {
   await updateEventsPoller();
   if ("notifyEvents" in patch && settings.notifyEvents) refreshEvents(channel, false); // estado inicial, sem notificar o que ja estava rolando
   if ("turboSell" in patch) await reevaluateTurboSell(channel);
+  if ("protection" in patch) onProtectionSettingsChanged(channel);
   if (!settings.enabled || reschedules) {
     await scheduleDueAlarm(channel, settings.nextFireAt);
   }
@@ -1187,6 +1191,8 @@ async function runTurboSell(channel) {
     const soldEnd = ((gameState || {})[channel] || {}).turboSoldEndsAt;
     if (soldEnd && Math.abs(soldEnd - endsAt) < SAME_EVENT_TOLERANCE_MS) return;
     if (await checkChallenge("venda turbinada")) return;
+    // Antes de vender tudo, garante as especies protegidas na whitelist.
+    await syncProtection(channel, "antes da venda");
 
     const r = await enqueueCommand(channel, AT.SELL_ALL_COMMAND, { reason: `Venda Turbinada (x${sell.value})` });
     if (r.ok) {
@@ -1519,6 +1525,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if ("notifyAutomations" in patch) g.notifyAutomations = !!patch.notifyAutomations;
         if (patch.duelAccept) g.duelAccept = AT.sanitizeDuelAccept({ ...g.duelAccept, ...patch.duelAccept });
         if (patch.turboSell) g.turboSell = AT.sanitizeTurboSell({ ...g.turboSell, ...patch.turboSell });
+        if (patch.protection) g.protection = AT.sanitizeProtection({ ...g.protection, ...patch.protection });
         if (patch.semiAuto) {
           g.semiAuto = { ...g.semiAuto };
           if ("focusTab" in patch.semiAuto) g.semiAuto.focusTab = !!patch.semiAuto.focusTab;
@@ -1526,6 +1533,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
       });
       if (patch.turboSell) await reevaluateTurboSell();
+      if (patch.protection) onProtectionSettingsChanged(null);
       sendResponse({ general: await getGeneralSettings() });
     })();
     return true;
@@ -1610,7 +1618,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    const m = /^(semi|duel|duel-auto|sell-auto|event):([^:]+)/.exec(id);
+    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|event):([^:]+)/.exec(id);
     if (!m) return;
     const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);
