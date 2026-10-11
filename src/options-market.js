@@ -14,7 +14,6 @@
 
   let list = [];
   let species = []; // [{id, name, tier, min_kg, max_kg}]
-  let saveTimer = null;
 
   const send = (msg) => browser.runtime.sendMessage(msg);
   const fmtTime = (t) => (t ? new Date(t).toLocaleTimeString() : "—");
@@ -46,105 +45,195 @@
     for (const f of species) {
       const o = document.createElement("option");
       o.value = f.name;
-      o.label = `${f.tier || ""} · ${f.min_kg}–${f.max_kg} kg`;
+      o.label = `${({ common: "comum", uncommon: "incomum", rare: "raro", legendary: "lendário", mythic: "mítico", secret: "secreto", divine: "divino" })[f.tier] || f.tier || ""} · ${f.min_kg}–${f.max_kg} kg`;
       fishOptionsEl.appendChild(o);
     }
   }
 
   // ---------------------------------------------------------------- lista
-  function numInput(value, step, cls) {
-    const i = document.createElement("input");
-    i.type = "number";
-    i.min = "0";
-    i.step = step;
-    if (cls) i.className = cls;
-    i.value = Number.isFinite(value) ? value : "";
-    return i;
+  // Raridades como o site mostra em portugues.
+  const TIER_PT = { common: "comum", uncommon: "incomum", rare: "raro", legendary: "lendário", mythic: "mítico", secret: "secreto", divine: "divino" };
+
+  function speciesInfo(f) {
+    return f ? `${TIER_PT[f.tier] || f.tier || ""} · ${f.min_kg}–${f.max_kg} kg` : "";
   }
 
-  function scheduleSave() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(save, 400);
+  // Aceita virgula ou ponto; vazio/invalido -> NaN.
+  function parseNum(s) {
+    const t = String(s ?? "").trim().replace(",", ".");
+    if (!t) return NaN;
+    const n = Number(t);
+    return Number.isFinite(n) && n >= 0 ? n : NaN;
   }
+
+  const fmt = (n) => (Number.isFinite(n) ? String(n).replace(".", ",") : "?");
 
   async function save() {
     const res = await send({ type: "SAVE_ACQUISITION_LIST", list });
     list = res.list || list;
   }
 
+  // ---------------------------------------------------------------- lista (resumo)
   function renderList() {
     listEl.innerHTML = "";
     if (!list.length) {
       const p = document.createElement("div");
-      p.className = "hint";
+      p.className = "acq-empty";
       p.textContent = "Nenhum peixe na lista ainda. Clique em \"Adicionar peixe\".";
       listEl.appendChild(p);
       return;
     }
     list.forEach((entry, idx) => {
+      const f = species.find((x) => x.id === entry.fishId);
+      const card = document.createElement("div");
+      card.className = "acq-card" + (entry.enabled ? "" : " off");
       const row = document.createElement("div");
-      row.className = "acq-row";
+      row.className = "acq-summary";
 
-      const fish = document.createElement("input");
-      fish.type = "text";
-      fish.className = "fish";
-      fish.setAttribute("list", "fishOptions");
-      fish.placeholder = "nome do peixe";
-      fish.value = entry.fishName || entry.fishId || "";
-      const markFish = () => fish.classList.toggle("invalid", !fishIdFromInput(fish.value));
-      fish.addEventListener("change", () => {
-        const f = fishIdFromInput(fish.value);
-        entry.fishId = f ? f.id : "";
-        entry.fishName = f ? f.name : fish.value.trim();
-        if (f) fish.title = `${f.min_kg}–${f.max_kg} kg`;
-        markFish();
-        scheduleSave();
-      });
-
-      const fields = [
-        ["minKg", numInput(entry.minKg, "0.01")],
-        ["minPct", numInput(entry.minPct, "0.1")],
-        ["maxPrice", numInput(entry.maxPrice, "1")],
-        ["maxPriceBelow95", numInput(entry.maxPriceBelow95, "1")]
-      ];
-      for (const [key, input] of fields) {
-        const mark = () => input.classList.toggle("invalid", !(input.value !== "" && Number(input.value) >= 0));
-        input.addEventListener("change", () => {
-          entry[key] = input.value === "" ? NaN : Number(input.value);
-          mark();
-          scheduleSave();
-        });
-        mark();
+      const text = document.createElement("div");
+      text.className = "acq-text";
+      const name = document.createElement("strong");
+      name.textContent = entry.fishName || entry.fishId || "(sem peixe)";
+      text.append(name, f ? `  ${speciesInfo(f)}` : "");
+      const crit = document.createElement("div");
+      crit.textContent =
+        `Peso ≥ ${fmt(entry.minKg)} kg · até ${fmt(entry.maxPrice)} · ` +
+        `abaixo de 95%: até ${fmt(entry.maxPriceBelow95)} com % ≥ ${fmt(entry.minPct)}`;
+      text.appendChild(crit);
+      if (!AT.isValidAcquisition(entry)) {
+        const warn = document.createElement("div");
+        warn.style.color = "var(--warn)";
+        warn.textContent = "Incompleto — clique em Editar para corrigir (fica fora das compras).";
+        text.appendChild(warn);
       }
 
-      const activeWrap = document.createElement("span");
-      activeWrap.className = "center";
+      const activeLabel = document.createElement("label");
+      activeLabel.className = "acq-active";
       const active = document.createElement("input");
       active.type = "checkbox";
+      active.className = "switch";
       active.checked = !!entry.enabled;
-      active.title = "Ativo";
-      active.addEventListener("change", () => {
-        entry.enabled = active.checked;
-        scheduleSave();
+      active.addEventListener("change", async () => {
+        list[idx] = { ...list[idx], enabled: active.checked };
+        await save();
+        renderList();
       });
-      activeWrap.appendChild(active);
+      activeLabel.append(active, "Ativo");
+
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "btn secondary acq-remove";
+      edit.textContent = "Editar";
+      edit.addEventListener("click", () => openForm(idx));
 
       const remove = document.createElement("button");
       remove.type = "button";
-      remove.className = "icon-btn";
-      remove.textContent = "✕";
-      remove.title = "Remover da lista";
-      remove.addEventListener("click", () => {
+      remove.className = "btn danger acq-remove";
+      remove.textContent = "Remover";
+      remove.addEventListener("click", async () => {
         list.splice(idx, 1);
+        if (editingIndex === idx) closeForm();
+        await save();
         renderList();
-        scheduleSave();
       });
 
-      row.append(fish, ...fields.map(([, i]) => i), activeWrap, remove);
-      listEl.appendChild(row);
-      if (species.length) markFish();
+      row.append(text, activeLabel, edit, remove);
+      card.appendChild(row);
+      listEl.appendChild(card);
     });
   }
+
+  // ---------------------------------------------------------------- formulario
+  const form = el("acqForm");
+  const fFish = el("f-fish");
+  const fFishHint = el("f-fish-hint");
+  const fMinKg = el("f-minKg");
+  const fMinPct = el("f-minPct");
+  const fMaxPrice = el("f-maxPrice");
+  const fMaxBelow = el("f-maxBelow");
+  const fEnabled = el("f-enabled");
+  const fError = el("acqFormError");
+  let editingIndex = null; // null = adicionando
+
+  function updateFishHint() {
+    const f = fishIdFromInput(fFish.value);
+    fFishHint.textContent = f ? speciesInfo(f) : fFish.value.trim() ? "peixe não encontrado — escolha um da lista de sugestões" : "escolha um peixe da lista de sugestões";
+    fFish.classList.toggle("invalid", !!fFish.value.trim() && !f);
+  }
+  fFish.addEventListener("input", updateFishHint);
+
+  function openForm(idx = null) {
+    editingIndex = idx;
+    const e = idx === null ? null : list[idx];
+    el("acqFormTitle").textContent = idx === null ? "Adicionar peixe" : `Editar ${e.fishName || "peixe"}`;
+    el("acqConfirm").textContent = idx === null ? "Confirmar e adicionar" : "Salvar alterações";
+    fFish.value = e ? e.fishName || "" : "";
+    fMinKg.value = e && Number.isFinite(e.minKg) ? fmt(e.minKg) : "";
+    fMinPct.value = e && Number.isFinite(e.minPct) ? fmt(e.minPct) : "";
+    fMaxPrice.value = e && Number.isFinite(e.maxPrice) ? fmt(e.maxPrice) : "";
+    fMaxBelow.value = e && Number.isFinite(e.maxPriceBelow95) ? fmt(e.maxPriceBelow95) : "";
+    fEnabled.checked = e ? !!e.enabled : true;
+    for (const i of [fFish, fMinKg, fMinPct, fMaxPrice, fMaxBelow]) i.classList.remove("invalid");
+    fError.textContent = "";
+    updateFishHint();
+    form.hidden = false;
+    el("acqAdd").hidden = true;
+    fFish.focus();
+  }
+
+  function closeForm() {
+    form.hidden = true;
+    editingIndex = null;
+    el("acqAdd").hidden = false;
+  }
+
+  // Le e valida tudo SO no clique de confirmar.
+  async function confirmForm() {
+    const f = fishIdFromInput(fFish.value);
+    const values = {
+      minKg: parseNum(fMinKg.value),
+      minPct: parseNum(fMinPct.value),
+      maxPrice: parseNum(fMaxPrice.value),
+      maxPriceBelow95: parseNum(fMaxBelow.value)
+    };
+    const problems = [];
+    fFish.classList.toggle("invalid", !f);
+    if (!f) problems.push("escolha um peixe da lista de sugestões");
+    const labels = { minKg: [fMinKg, "peso mínimo"], minPct: [fMinPct, "% mínima"], maxPrice: [fMaxPrice, "valor máximo"], maxPriceBelow95: [fMaxBelow, "valor máx. abaixo de 95%"] };
+    for (const [k, [input, label]] of Object.entries(labels)) {
+      const bad = !Number.isFinite(values[k]);
+      input.classList.toggle("invalid", bad);
+      if (bad) problems.push(label);
+    }
+    if (Number.isFinite(values.minPct) && values.minPct > 100) {
+      fMinPct.classList.add("invalid");
+      problems.push("% mínima acima de 100");
+    }
+    if (problems.length) {
+      fError.textContent = `Confira: ${problems.join(", ")}. Use números (vírgula ou ponto).`;
+      return;
+    }
+
+    const entry = {
+      ...(editingIndex !== null ? list[editingIndex] : {}),
+      fishId: f.id,
+      fishName: f.name,
+      ...values,
+      enabled: fEnabled.checked
+    };
+    if (editingIndex === null) list.push(entry);
+    else list[editingIndex] = entry;
+    await save();
+    closeForm();
+    renderList();
+  }
+
+  el("acqConfirm").addEventListener("click", confirmForm);
+  el("acqCancel").addEventListener("click", closeForm);
+  form.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") confirmForm();
+    if (ev.key === "Escape") closeForm();
+  });
 
   // ---------------------------------------------------------------- status
   function renderStatus(state) {
@@ -224,19 +313,12 @@
     renderList();
   });
 
-  el("acqAdd").addEventListener("click", () => {
-    list.push({ fishId: "", fishName: "", minKg: NaN, minPct: NaN, maxPrice: NaN, maxPriceBelow95: NaN, enabled: true });
-    renderList();
-    const inputs = listEl.querySelectorAll(".fish");
-    if (inputs.length) inputs[inputs.length - 1].focus();
-  });
+  el("acqAdd").addEventListener("click", () => openForm(null));
 
   el("marketRun").addEventListener("click", async () => {
     const btn = el("marketRun");
     btn.disabled = true;
     runStatusEl.textContent = enabledEl.checked ? "Verificando…" : "Simulando (aquisição desligada)…";
-    clearTimeout(saveTimer);
-    await save();
     const r = await send({ type: "RUN_MARKET_NOW" });
     renderStatus(r.state);
     runStatusEl.textContent = "";

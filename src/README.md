@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.4
+# Auto Twish — v 0.3.5
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -126,7 +126,10 @@ a verificação sai. Ela só lê esse estado — nunca responde a verificação.
 
 Na página de configurações, seção "Mercado". Desligada por padrão.
 
-- Lista de aquisição: para cada peixe, peso mínimo (kg), % mínima do peso
+- Lista de aquisição: "Adicionar peixe" abre um formulário; o peixe só
+  entra na lista ao clicar em "Confirmar e adicionar" (valores conferidos
+  nesse clique; vírgula ou ponto). Itens já adicionados têm Ativo, Editar e
+  Remover. Para cada peixe: peso mínimo (kg), % mínima do peso
   máximo da espécie, valor máximo e valor máximo abaixo de 95%. Regra: o
   peixe precisa ter o peso mínimo e custar até o valor máximo; com 95% ou
   mais, compra; abaixo de 95%, só compra se custar até o "máx. abaixo de 95%"
@@ -145,7 +148,7 @@ Na página de configurações, seção "Mercado". Desligada por padrão.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.4 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.5 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -213,6 +216,13 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.5** — Mercado: lista de aquisição refeita.
+  - Corrigido: valores digitados não eram salvos depois da primeira gravação
+    (a lista era trocada e os campos ficavam presos à cópia antiga); vírgula
+    podia ser descartada pelos campos numéricos.
+  - Formulário de adicionar/editar com botão de confirmação e validação;
+    cada campo com rótulo próprio (antes a identificação sumia em abas
+    estreitas); itens em resumo com Ativo, Editar e Remover.
 - **v 0.3.4** — Fase 4 (início): trava de segurança e Mercado.
   - Trava de segurança: pausa envios e Mercado com verificação pendente
     (`/api/me/challenge`), avisa e retoma sozinha.

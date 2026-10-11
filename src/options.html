@@ -127,40 +127,73 @@
   }
 
   /* Mercado */
-  .market-row-head,
-  .acq-row {
-    display: grid;
-    grid-template-columns: minmax(130px, 2fr) repeat(4, minmax(64px, 1fr)) 44px 32px;
-    gap: 6px;
-    align-items: center;
+  .acq-card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    background: var(--bg);
   }
-  .market-row-head {
+  .acq-card + .acq-card {
+    margin-top: 10px;
+  }
+  .acq-card.off {
+    opacity: 0.6;
+  }
+  .acq-top {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+  }
+  .acq-top .fish-field {
+    flex: 1;
+    min-width: 0;
+  }
+  .acq-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .acq-field label {
+    display: block;
     font-size: 11px;
     color: var(--text-muted);
-    margin: 14px 0 4px;
+    margin-bottom: 4px;
   }
-  .acq-row + .acq-row {
-    margin-top: 6px;
-  }
-  .acq-row input[type="text"],
-  .acq-row input[type="number"],
+  .acq-field input,
   .num-input {
     width: 100%;
     background: var(--bg-sunken);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 5px 6px;
-    font-size: 12px;
+    padding: 6px 8px;
+    font-size: 13px;
   }
-  .acq-row input.invalid {
+  .acq-field input.invalid {
     border-color: var(--danger);
   }
-  .acq-row .center {
-    text-align: center;
+  .acq-field .field-hint {
+    font-size: 10px;
+    color: var(--text-faint);
+    margin-top: 3px;
+    min-height: 1em;
+  }
+  .acq-active {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding-bottom: 6px;
+    white-space: nowrap;
+  }
+  .acq-remove {
+    padding: 5px 10px;
+    margin-bottom: 2px;
   }
   .num-input {
-    width: 90px;
+    width: 100px;
   }
   .market-status {
     margin-top: 14px;
@@ -176,19 +209,33 @@
     padding-left: 18px;
     font-size: 12px;
   }
-  @media (max-width: 760px) {
-    .market-row-head {
-      display: none;
-    }
-    .acq-row {
-      grid-template-columns: 1fr 1fr;
-      padding: 8px;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-    }
-    .acq-row .fish {
-      grid-column: 1 / -1;
-    }
+  .acq-form {
+    margin-top: 10px;
+    border-color: var(--accent);
+  }
+  .acq-summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .acq-summary .acq-text {
+    flex: 1;
+    min-width: 220px;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+  .acq-summary .acq-text strong {
+    color: var(--text);
+    font-size: 13px;
+  }
+  .acq-empty {
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    color: var(--text-muted);
+    font-size: 12px;
   }
   @media (max-width: 560px) {
     .channel-grid {
@@ -279,11 +326,53 @@
       <span>Notificar cada compra</span>
     </label>
 
-    <div class="market-row-head">
-      <span>Peixe</span><span>Peso mín. (kg)</span><span>% mín.</span><span>Valor máx.</span><span>Máx. abaixo de 95%</span><span class="center">Ativo</span><span></span>
-    </div>
+    <div class="setting-title" style="margin-top:18px">Lista de aquisição</div>
+    <div class="hint" style="margin-bottom:10px">Cada peixe da lista tem os próprios critérios.</div>
     <div id="acqList"></div>
     <datalist id="fishOptions"></datalist>
+
+    <!-- Formulario de adicionar/editar (aparece ao clicar em "Adicionar peixe" ou "Editar") -->
+    <div id="acqForm" class="acq-card acq-form" hidden>
+      <div class="setting-title" id="acqFormTitle">Adicionar peixe</div>
+      <div class="acq-fields" style="grid-template-columns: 1fr">
+        <div class="acq-field">
+          <label for="f-fish">Peixe</label>
+          <input id="f-fish" type="text" list="fishOptions" autocomplete="off" placeholder="comece a digitar o nome (ex: trairão)" />
+          <div class="field-hint" id="f-fish-hint">escolha um peixe da lista de sugestões</div>
+        </div>
+      </div>
+      <div class="acq-fields">
+        <div class="acq-field">
+          <label for="f-minKg">Peso mínimo (kg)</label>
+          <input id="f-minKg" type="text" inputmode="decimal" autocomplete="off" placeholder="ex: 2,5" />
+          <div class="field-hint">peso do peixe em kg</div>
+        </div>
+        <div class="acq-field">
+          <label for="f-minPct">% mínima do peso máx.</label>
+          <input id="f-minPct" type="text" inputmode="decimal" autocomplete="off" placeholder="ex: 80" />
+          <div class="field-hint">vale só abaixo de 95%</div>
+        </div>
+        <div class="acq-field">
+          <label for="f-maxPrice">Valor máximo</label>
+          <input id="f-maxPrice" type="text" inputmode="decimal" autocomplete="off" placeholder="ex: 500" />
+          <div class="field-hint">teto para qualquer anúncio</div>
+        </div>
+        <div class="acq-field">
+          <label for="f-maxBelow">Valor máx. abaixo de 95%</label>
+          <input id="f-maxBelow" type="text" inputmode="decimal" autocomplete="off" placeholder="ex: 200" />
+          <div class="field-hint">teto quando a % é menor que 95</div>
+        </div>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="f-enabled" checked />
+        <span>Ativo (entra nas compras)</span>
+      </label>
+      <div id="acqFormError" class="hint stale" role="alert"></div>
+      <div class="channel-actions" style="margin-top:10px">
+        <button type="button" id="acqConfirm" class="btn">Confirmar</button>
+        <button type="button" id="acqCancel" class="btn secondary">Cancelar</button>
+      </div>
+    </div>
     <div class="hint">Regra: o peixe precisa ter pelo menos o peso mínimo e custar até o valor máximo. Com 95% ou mais do peso máximo da espécie, compra. Abaixo de 95%, só compra se custar até o "máx. abaixo de 95%" e tiver pelo menos a % mínima.</div>
 
     <div class="channel-actions">
