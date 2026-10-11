@@ -1,4 +1,4 @@
-# Auto Twish — v 0.1.2
+# Auto Twish — v 0.1.3
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -83,7 +83,7 @@ aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.1.2 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.1.3 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -176,6 +176,10 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.1.3** — ID interno da extensão trocado de `twitch-auto-chat@local.extension`
+  para `auto-twish@local.extension`. O Firefox trata como uma extensão nova:
+  as configurações salvas dos canais não são herdadas e precisam ser feitas de
+  novo (remova a versão antiga em `about:debugging` para não rodar as duas).
 - **v 0.1.2** — junção da LSV (última versão estável) com a ICP (versão em
   desenvolvimento) e renomeação do projeto para **Auto Twish**.
   - Varas com os nomes reais do jogo (Bambu → Njord) e detecção automática da
@@ -187,7 +191,8 @@ o código pronto caso um dia se queira rodar em Chromium.
   - Renomeação: nome da extensão, título do popup (agora mostra a versão),
     prefixo dos logs (`[Auto Twish]`) e nomes dos alarmes; alarmes com o nome
     antigo são limpos ao iniciar.
-  - Ids antigos de vara (`vara1`..`vara9`) convertidos automaticamente.
+  - Ids antigos de vara (`vara1`..`vara9`) convertidos automaticamente
+    (só tem efeito em configurações salvas com o mesmo ID de extensão).
 - **v 0.1.1** — LSV (antiga "Twitch Auto Chat"): envio de `$pescar` por vara +
   atraso aleatório, alarme dedicado por canal + heartbeat, confirmação de
   envio com retry em 15 s, modo automático pelo título da aba do Twish.
