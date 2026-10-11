@@ -362,6 +362,53 @@
     font-size: 12px;
     color: var(--text-muted);
   }
+  /* Canais: secao que abre e fecha (fica no fim da pagina) */
+  .channels-box {
+    margin-top: 32px;
+  }
+  .channels-box > summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-raised);
+  }
+  .channels-box > summary::-webkit-details-marker {
+    display: none;
+  }
+  .channels-box > summary:hover {
+    border-color: var(--accent);
+  }
+  .channels-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .channels-count {
+    font-size: 12px;
+    color: var(--text-faint);
+  }
+  .channels-toggle {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--accent-text);
+  }
+  .channels-toggle::after {
+    content: "mostrar ▾";
+  }
+  .channels-box[open] .channels-toggle::after {
+    content: "esconder ▴";
+  }
+  .channels-box[open] > summary {
+    margin-bottom: 12px;
+  }
   .kit-event {
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -463,8 +510,6 @@
     </div>
   </section>
 
-  <h2>Canais</h2>
-  <div id="channels"></div>
 
   <h2>Mercado — aquisição automática</h2>
   <section class="panel">
@@ -555,6 +600,15 @@
 
     <div id="marketStatus" class="market-status"></div>
   </section>
+
+  <details id="channelsBox" class="channels-box">
+    <summary>
+      <span class="channels-title">Canais</span>
+      <span id="channelsCount" class="channels-count"></span>
+      <span class="channels-toggle" aria-hidden="true"></span>
+    </summary>
+    <div id="channels"></div>
+  </details>
 </main>
 
 <template id="channelTemplate">

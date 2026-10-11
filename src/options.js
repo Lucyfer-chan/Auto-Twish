@@ -867,6 +867,10 @@ function renderClock(name) {
 
 function renderChannels() {
   const names = Object.keys(state.channels).sort((a, b) => a.localeCompare(b));
+  const enabledCount = names.filter((n) => state.channels[n] && state.channels[n].enabled).length;
+  $("channelsCount").textContent = names.length
+    ? `${names.length} cana${names.length === 1 ? "l" : "is"} · ${enabledCount} ativado${enabledCount === 1 ? "" : "s"}`
+    : "nenhum ainda";
 
   // Remove cartoes de canais que sumiram.
   for (const name of [...cards.keys()]) {
@@ -934,5 +938,18 @@ browser.storage.onChanged.addListener((changes, area) => {
 setInterval(() => {
   for (const name of cards.keys()) renderClock(name);
 }, 1000);
+
+// Lista de canais: fechada por padrao; lembra se o jogador deixou aberta.
+(() => {
+  const box = $("channelsBox");
+  try {
+    if (localStorage.getItem("at.channelsOpen") === "1") box.open = true;
+  } catch (e) {}
+  box.addEventListener("toggle", () => {
+    try {
+      localStorage.setItem("at.channelsOpen", box.open ? "1" : "0");
+    } catch (e) {}
+  });
+})();
 
 loadState();

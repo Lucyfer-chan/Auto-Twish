@@ -111,7 +111,7 @@ function renderTwishStatus() {
   }
   if (!sync.found) {
     twishStatusEl.textContent =
-      "Twish: não consegui ler sua conta nem uma aba deste canal. Entre (faça login) no twish.com.br neste Firefox" +
+      `Twish: não consegui ler sua conta nem uma aba deste canal. Entre (faça login) no twish.com.br neste ${AT.browserName()}` +
       (current && AT.followsTwish(current.mode) ? " — até lá, vale a estimativa da vara." : ".");
     twishStatusEl.className = "hint stale";
     return;

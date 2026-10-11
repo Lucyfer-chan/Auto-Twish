@@ -465,6 +465,15 @@ AT.shouldBuy = function (e, { weight, pct, price }) {
   return price <= e.maxPriceBelow95 && pct >= e.minPct;
 };
 
+// Nome do navegador para os textos da interface. So o Firefox tem
+// runtime.getBrowserInfo; no Chrome (e derivados) o `browser` e o `chrome`.
+AT.browserName = function () {
+  try {
+    if (typeof browser !== "undefined" && browser.runtime && typeof browser.runtime.getBrowserInfo === "function") return "Firefox";
+  } catch (e) {}
+  return "Chrome";
+};
+
 // "mm:ss" (sem milissegundos).
 AT.formatRemaining = function (ms) {
   const total = Math.max(0, Math.ceil(ms / 1000));
