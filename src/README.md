@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.7
+# Auto Twish — v 0.3.8
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -154,11 +154,27 @@ Na página de configurações, seção "Mercado". Desligada por padrão.
   compraria, sem comprar.
 - Precisa estar logado no twish.com.br neste Firefox.
 
+## Automações por evento (desligadas por padrão)
+
+Configuradas em "Automações — padrão geral"; cada canal pode ter uma exceção
+própria no seu cartão ("usar o padrão geral" desmarcado). A aba do canal na
+Twitch precisa estar aberta.
+
+- **Fila de comandos:** tudo que a extensão manda no chat sai um por vez, com
+  2,5–5 s aleatórios entre comandos no mesmo canal, e para durante a verificação.
+- **Aceitar duelos** (`$aceitar`): 3–10 s depois do convite. Regras: sempre; só
+  se faltar ≥ X% do CD da pesca; só se faltar ≥ X minutos. As regras de tempo
+  leem o CD pela conta do Twish (sem leitura, não aceita). Aceitar zera o CD da
+  pesca, então a extensão confere a conta logo depois.
+- **Venda Turbinada** (`$vender todos`): uma vez por evento, X s antes do fim
+  (padrão 30, até 5 s a mais aleatório). Peixes na `$whitelist` não são vendidos.
+- Aviso opcional quando uma automação agir.
+
 ## Instalação — Firefox (temporária, para testar)
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.7 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.8 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -226,6 +242,10 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.8** — Automações por evento (Road Map item 3, parte 1).
+  Fila de comandos no chat; aceite automático de duelo com regra de CD
+  (sempre / % / minutos); Venda Turbinada com `$vender todos` perto do fim;
+  padrão geral + exceção por canal; aviso opcional de automação.
 - **v 0.3.7** — Mercado: compras retidas para análise.
   - O site pode responder `status: "held"` (compra retida pela
     administração). Antes a extensão contava como compra concluída; agora

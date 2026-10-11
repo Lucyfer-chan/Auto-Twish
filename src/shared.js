@@ -54,6 +54,18 @@ AT.DEFAULT_GENERAL_SETTINGS = {
   defaultMaxJitterSeconds: 10, // atraso aleatorio maximo padrao (canais sem excecao usam este)
   twishLogin: null, // login do jogador no Twish (lido da API; usado pra reconhecer convites de duelo)
   notifyDuelInvites: false, // notificacao quando alguem te desafia pra um duelo
+  notifyAutomations: false, // notificacao quando uma automacao age (duelo aceito, venda feita)
+  // Automacoes por evento (Road Map item 3). Valor geral; cada canal pode ter uma excecao.
+  duelAccept: {
+    enabled: false, // aceitar duelos sozinho ($aceitar)
+    rule: "pct", // "always" | "pct" | "minutes" — ver AT.duelAcceptDecision
+    pct: 50, // so aceita se faltar pelo menos isso (%) do CD da pesca
+    minutes: 3 // so aceita se faltar pelo menos isso (min) pro CD da pesca
+  },
+  turboSell: {
+    enabled: false, // Venda Turbinada: $vender todos perto do fim do evento
+    secondsBeforeEnd: 30
+  },
   semiAuto: {
     focusTab: true, // ao digitar, traz a aba (e a janela) da Twitch pra frente
     notify: true // mostra notificacao do sistema
@@ -67,6 +79,77 @@ AT.DEFAULT_GENERAL_SETTINGS = {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Automacoes por evento
+// ---------------------------------------------------------------------------
+AT.DUEL_RULES = ["always", "pct", "minutes"];
+AT.DUEL_RULE_LABELS = {
+  always: "Sempre",
+  pct: "Só se faltar pelo menos X% do CD da pesca",
+  minutes: "Só se faltar pelo menos X minutos para pescar"
+};
+AT.DUEL_ACCEPT_COMMAND = "$aceitar";
+AT.SELL_ALL_COMMAND = "$vender todos";
+
+AT.clampInt = function (v, min, max, fallback) {
+  const t = String(v ?? "").trim().replace(",", ".");
+  const n = t === "" ? NaN : Number(t);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+};
+
+AT.sanitizeDuelAccept = function (x) {
+  const d = { enabled: false, rule: "pct", pct: 50, minutes: 3 };
+  const o = x && typeof x === "object" ? x : {};
+  return {
+    enabled: !!o.enabled,
+    rule: AT.DUEL_RULES.includes(o.rule) ? o.rule : d.rule,
+    pct: AT.clampInt(o.pct, 1, 100, d.pct),
+    minutes: AT.clampInt(o.minutes, 1, 60, d.minutes)
+  };
+};
+
+AT.sanitizeTurboSell = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  return { enabled: !!o.enabled, secondsBeforeEnd: AT.clampInt(o.secondsBeforeEnd, 5, 600, 30) };
+};
+
+// Valor efetivo de um canal: a excecao dele, ou o geral (igual ao atraso).
+AT.effectiveDuelAccept = function (channelSettings, general) {
+  const own = channelSettings && channelSettings.duelAccept;
+  return AT.sanitizeDuelAccept(own || (general || AT.DEFAULT_GENERAL_SETTINGS).duelAccept);
+};
+AT.effectiveTurboSell = function (channelSettings, general) {
+  const own = channelSettings && channelSettings.turboSell;
+  return AT.sanitizeTurboSell(own || (general || AT.DEFAULT_GENERAL_SETTINGS).turboSell);
+};
+
+// Aceitar duelo zera o CD da pesca, entao so compensa quando ainda falta
+// bastante. remainingMs = quanto falta pra pescar; fullMs = CD inteiro da vara
+// (com Mare Turbo, se houver). Sem essas informacoes, so a regra "Sempre" aceita.
+AT.duelAcceptDecision = function (cfg, { remainingMs, fullMs }) {
+  if (!cfg || !cfg.enabled) return { accept: false, why: "aceite automático desligado" };
+  if (cfg.rule === "always") return { accept: true, why: "regra: sempre" };
+  if (remainingMs === null || remainingMs === undefined) return { accept: false, why: "não deu pra ler o CD da pesca" };
+  if (cfg.rule === "minutes") {
+    const ok = remainingMs >= cfg.minutes * 60000;
+    return { accept: ok, why: `faltam ${AT.formatRemaining(remainingMs)} para pescar (mínimo ${cfg.minutes} min)` };
+  }
+  if (!(fullMs > 0)) return { accept: false, why: "CD da vara desconhecido" };
+  const pct = Math.round((remainingMs / fullMs) * 100);
+  return { accept: pct >= cfg.pct, why: `faltam ${pct}% do CD da pesca (mínimo ${cfg.pct}%)` };
+};
+
+AT.describeDuelAccept = function (cfg) {
+  if (!cfg.enabled) return "desligado";
+  if (cfg.rule === "always") return "ligado, sempre";
+  if (cfg.rule === "pct") return `ligado, se faltar ≥ ${cfg.pct}% do CD`;
+  return `ligado, se faltar ≥ ${cfg.minutes} min`;
+};
+AT.describeTurboSell = function (cfg) {
+  return cfg.enabled ? `ligado, ${cfg.secondsBeforeEnd}s antes do fim` : "desligado";
+};
+
 // Mescla configuracoes gerais salvas com os padroes (inclusive os sub-objetos).
 AT.mergeGeneral = function (saved) {
   const g = saved || {};
@@ -74,6 +157,8 @@ AT.mergeGeneral = function (saved) {
     ...AT.DEFAULT_GENERAL_SETTINGS,
     ...g,
     semiAuto: { ...AT.DEFAULT_GENERAL_SETTINGS.semiAuto, ...(g.semiAuto || {}) },
+    duelAccept: AT.sanitizeDuelAccept(g.duelAccept),
+    turboSell: AT.sanitizeTurboSell(g.turboSell),
     market: { ...AT.DEFAULT_GENERAL_SETTINGS.market, ...(g.market || {}) }
   };
 };
@@ -86,6 +171,8 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   mode: "manual", // "manual" | "auto" | "semi"
   awaitingUser: false, // semi-automatico: comando digitado, esperando o jogador enviar
   notifyEvents: false, // notificacao quando comeca um evento neste canal
+  duelAccept: null, // null = usa o valor geral; objeto = excecao deste canal
+  turboSell: null, // idem
   twishAvailableAt: null, // ultimo horario real de disponibilidade lido do Twish
   twishLastSeen: null, // quando essa leitura foi feita (gravado no maximo 1x/min durante o mesmo cooldown)
   lastSentAt: null, // ultimo envio local bem-sucedido

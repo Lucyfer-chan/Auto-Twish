@@ -610,11 +610,46 @@ async function syncAllTwishTabs() {
   }
 }
 
-// Tenta enviar a mensagem fixa pra(s) aba(s) do canal e reporta se o
+// ---------------------------------------------------------------------------
+// Fila de comandos no chat
+// Todo comando (pesca, $destaque, $aceitar, $vender...) passa por aqui: um
+// por vez, e com um intervalo aleatorio entre dois comandos no mesmo canal,
+// pra nao sair uma rajada robotica. Respeita a trava de seguranca.
+// ---------------------------------------------------------------------------
+const CHAT_MIN_GAP_MS = 2500; // intervalo minimo entre dois comandos no mesmo canal
+const CHAT_GAP_JITTER_MS = 2500; // + ate isso, aleatorio
+let chatChain = Promise.resolve();
+const lastChatAt = new Map(); // canal -> horario do ultimo comando enviado
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function attemptSend(channel, text = FIXED_MESSAGE) {
+  const run = chatChain.then(async () => {
+    const last = lastChatAt.get(channel) || 0;
+    const wait = last + CHAT_MIN_GAP_MS + Math.random() * CHAT_GAP_JITTER_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    const r = await sendChatNow(channel, text);
+    if (r.ok) lastChatAt.set(channel, Date.now());
+    return r;
+  });
+  chatChain = run.catch(() => {});
+  return run;
+}
+
+// Comando de uma automacao: espera um pouco (reacao "humana") e entra na fila.
+async function enqueueCommand(channel, text, { delayMs = 0, reason = "" } = {}) {
+  if (delayMs > 0) await sleep(delayMs);
+  if (safetyLocked) return { ok: false, reason: "verificacao-pendente" };
+  const r = await attemptSend(channel, text);
+  console.log(`${AT.LOG_PREFIX} [fila] "${text}" em "${channel}"${reason ? ` (${reason})` : ""}: ${r.ok ? "enviado" : `falhou (${r.reason})`}.`);
+  return r;
+}
+
+// Tenta enviar a mensagem pra(s) aba(s) do canal e reporta se o
 // content.js confirmou que o texto foi digitado e o envio foi disparado.
 // NAO confirma que o TwishGameBot de fato respondeu — so que o envio
-// local (Twitch) funcionou.
-async function attemptSend(channel, text = FIXED_MESSAGE) {
+// local (Twitch) funcionou. Use attemptSend (fila), nunca esta direto.
+async function sendChatNow(channel, text) {
   if (safetyLocked) return { ok: false, reason: "verificacao-pendente" };
   const tabs = await browser.tabs.query({ url: "*://*.twitch.tv/*" });
   const targets = tabs.filter((t) => extractChannelFromUrl(t.url) === channel);
@@ -669,6 +704,13 @@ async function applyChannelSettings(channel, patch) {
     if ("mode" in patch) s.mode = AT.MODES.includes(patch.mode) ? patch.mode : "manual";
     if ("rod" in patch) s.rod = AT.ROD_MINUTES[patch.rod] !== undefined ? patch.rod : DEFAULT_ROD;
     if ("notifyEvents" in patch) s.notifyEvents = !!patch.notifyEvents;
+    // Excecoes do canal: null volta a usar o valor geral.
+    if ("duelAccept" in patch) {
+      s.duelAccept = patch.duelAccept === null ? null : AT.sanitizeDuelAccept({ ...AT.effectiveDuelAccept(previous, stateCache && stateCache.general), ...patch.duelAccept });
+    }
+    if ("turboSell" in patch) {
+      s.turboSell = patch.turboSell === null ? null : AT.sanitizeTurboSell({ ...AT.effectiveTurboSell(previous, stateCache && stateCache.general), ...patch.turboSell });
+    }
     if ("maxJitterSeconds" in patch) {
       s.maxJitterSeconds = patch.maxJitterSeconds === null ? null : clampJitterSeconds(patch.maxJitterSeconds);
     }
@@ -710,6 +752,7 @@ async function applyChannelSettings(channel, patch) {
   await updateHeartbeat();
   await updateEventsPoller();
   if ("notifyEvents" in patch && settings.notifyEvents) refreshEvents(channel, false); // estado inicial, sem notificar o que ja estava rolando
+  if ("turboSell" in patch) await reevaluateTurboSell(channel);
   if (!settings.enabled || reschedules) {
     await scheduleDueAlarm(channel, settings.nextFireAt);
   }
@@ -722,10 +765,26 @@ async function applyChannelSettings(channel, patch) {
   return settings;
 }
 
+// Ligar/desligar a Venda Turbinada: agenda (ou cancela) na hora, a partir
+// dos eventos ja conhecidos, e busca eventos frescos.
+async function reevaluateTurboSell(only) {
+  await updateEventsPoller();
+  const channels = await getAllChannelSettings();
+  for (const channel of Object.keys(channels)) {
+    if (only && channel !== only) continue;
+    const ev = await refreshEvents(channel, false);
+    if (!ev) {
+      const { gameState } = await browser.storage.local.get("gameState");
+      await scheduleTurboSell(channel, ((gameState || {})[channel] || {}).events || null);
+    }
+  }
+}
+
 async function removeChannel(channel) {
   await mutateChannels((channels) => {
     delete channels[channel];
   });
+  await browser.alarms.clear(`${SELL_ALARM_PREFIX}${channel}`);
   await scheduleDueAlarm(channel, null);
   clearSemiNotification(channel);
   await updateHeartbeat();
@@ -936,19 +995,21 @@ async function refreshEvents(channel, notify) {
     }
     console.log(`${AT.LOG_PREFIX} Evento(s) novo(s) em "${channel}":`, started);
   }
+  await scheduleTurboSell(channel, ev);
   return ev;
 }
 
 // Consulta de eventos: 1x por minuto, enquanto algum canal estiver ativado
 // (evento novo pode zerar o CD da pesca — ex: Mare Turbo) ou tiver
 // "Notificar eventos" ligado.
-function watchesEvents(s) {
-  return !!(s && (s.notifyEvents || s.enabled));
+function watchesEvents(s, general) {
+  return !!(s && (s.notifyEvents || s.enabled || AT.effectiveTurboSell(s, general).enabled));
 }
 
 async function updateEventsPoller() {
   const channels = await getAllChannelSettings();
-  const any = Object.values(channels).some(watchesEvents);
+  const general = await getGeneralSettings();
+  const any = Object.values(channels).some((s) => watchesEvents(s, general));
   const existing = await browser.alarms.get(AT.EVENTS_ALARM_NAME);
   if (any && !existing) await browser.alarms.create(AT.EVENTS_ALARM_NAME, { periodInMinutes: 1 });
   else if (!any && existing) await browser.alarms.clear(AT.EVENTS_ALARM_NAME);
@@ -956,8 +1017,12 @@ async function updateEventsPoller() {
 
 async function pollEvents() {
   const channels = await getAllChannelSettings();
+  const general = await getGeneralSettings();
   for (const [channel, s] of Object.entries(channels)) {
-    if (!watchesEvents(s)) continue;
+    if (!watchesEvents(s, general)) {
+      await browser.alarms.clear(`${SELL_ALARM_PREFIX}${channel}`);
+      continue;
+    }
     const before = await browser.storage.local.get("gameState");
     const hadKeys = eventKeys(((before.gameState || {})[channel] || {}).events);
     const ev = await refreshEvents(channel, !!s.notifyEvents);
@@ -993,6 +1058,148 @@ async function onDuelInvite(channel, challenger, target, windowSeconds) {
     } catch (e) {
       console.warn(`${AT.LOG_PREFIX} Falha ao notificar duelo:`, e);
     }
+  }
+  maybeAutoAcceptDuel(channel, challenger, expiresAt).catch((e) => console.warn(`${AT.LOG_PREFIX} Falha no aceite automatico de duelo:`, e));
+}
+
+// Aceite automatico de duelo (desligado por padrao). Aceitar zera o CD da
+// pesca, entao a regra do jogador decide se compensa.
+async function maybeAutoAcceptDuel(channel, challenger, expiresAt) {
+  const general = await getGeneralSettings();
+  const s = (await getAllChannelSettings())[channel] || null;
+  const cfg = AT.effectiveDuelAccept(s, general);
+  if (!cfg.enabled) return;
+
+  let remainingMs = null;
+  let fullMs = null;
+  if (cfg.rule !== "always") {
+    let rodId = null;
+    const me = await fetchTwishMe(channel);
+    if (me) {
+      const p = parseTwishMe(me);
+      remainingMs = Math.max(0, p.availableAt - Date.now());
+      rodId = p.rodId;
+    } else if (s && s.twishAvailableAt !== null && s.twishLastSeen && Date.now() - s.twishLastSeen < TWISH_DATA_FRESH_MS) {
+      remainingMs = Math.max(0, s.twishAvailableAt - Date.now());
+    }
+    const minutes = ROD_MINUTES[rodId || (s && s.rod)] || ROD_MINUTES[DEFAULT_ROD];
+    fullMs = minutes * 60000 * cooldownMultiplierFor(channel);
+  }
+
+  const d = AT.duelAcceptDecision(cfg, { remainingMs, fullMs });
+  if (!d.accept) {
+    console.log(`${AT.LOG_PREFIX} Duelo de @${challenger} em "${channel}" NAO aceito automaticamente: ${d.why}.`);
+    return;
+  }
+
+  // Reacao "humana": 3 a 10 s, sem passar do prazo do convite.
+  const room = Math.max(0, expiresAt - Date.now() - 5000);
+  const delayMs = Math.min(room, 3000 + Math.random() * 7000);
+  await sleep(delayMs);
+
+  // O convite ainda esta de pe? (o jogador pode ter aceitado/recusado na mao)
+  const { gameState } = await browser.storage.local.get("gameState");
+  const inv = ((gameState || {})[channel] || {}).duelInvite;
+  if (!inv || inv.from !== challenger || inv.expiresAt <= Date.now()) return;
+
+  const r = await enqueueCommand(channel, AT.DUEL_ACCEPT_COMMAND, { reason: `duelo de @${challenger}; ${d.why}` });
+  if (!r.ok) return;
+  await mutateGameState(channel, (st) => {
+    delete st.duelInvite;
+  });
+  try {
+    browser.notifications.clear(`duel:${channel}`);
+  } catch (e) {}
+  await notifyAutomation(`duel-auto:${channel}`, `⚔️ Duelo aceito em ${channel}`, `Aceitei o duelo de @${challenger} (${d.why}).`);
+  // Aceitar duelo zera o CD da pesca: confere a conta logo depois.
+  if (s && s.enabled) schedulePostSendCheck(channel, 5000);
+}
+
+async function notifyAutomation(id, title, message) {
+  const general = await getGeneralSettings();
+  if (!general.notifyAutomations) return;
+  try {
+    await browser.notifications.create(id, { type: "basic", title, message });
+  } catch (e) {
+    console.warn(`${AT.LOG_PREFIX} Falha ao notificar automacao:`, e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Venda Turbinada (kind "sell_multiplier"): $vender todos perto do fim.
+// Peixes protegidos com $whitelist nao sao vendidos pelo jogo.
+// ---------------------------------------------------------------------------
+const SELL_ALARM_PREFIX = "auto-twish-sell:";
+const SAME_EVENT_TOLERANCE_MS = 3 * 60 * 1000; // fim calculado varia alguns segundos entre consultas
+const sellingNow = new Set();
+
+function turboSellEvent(ev) {
+  return ev && ev.event && ev.event.kind === "sell_multiplier" ? ev.event : null;
+}
+
+// Agenda (ou cancela) a venda do canal a partir dos eventos conhecidos.
+async function scheduleTurboSell(channel, ev) {
+  const alarmName = `${SELL_ALARM_PREFIX}${channel}`;
+  const general = await getGeneralSettings();
+  const s = (await getAllChannelSettings())[channel] || null;
+  const cfg = AT.effectiveTurboSell(s, general);
+  const sell = turboSellEvent(ev);
+  if (!cfg.enabled || !sell) {
+    await browser.alarms.clear(alarmName);
+    return null;
+  }
+  const endsAt = (ev.fetchedAt || Date.now()) + Number(sell.seconds_remaining) * 1000;
+  const { gameState } = await browser.storage.local.get("gameState");
+  const soldEnd = ((gameState || {})[channel] || {}).turboSoldEndsAt;
+  if (soldEnd && Math.abs(soldEnd - endsAt) < SAME_EVENT_TOLERANCE_MS) {
+    await browser.alarms.clear(alarmName);
+    return null; // ja vendeu neste evento
+  }
+  if (endsAt - Date.now() < 3000) return null; // tarde demais
+  // Alvo: X s antes do fim, com ate 5 s a mais de antecedencia (aleatorio).
+  const target = endsAt - cfg.secondsBeforeEnd * 1000 - Math.random() * 5000;
+  const when = Math.max(Date.now() + 1000, target);
+  const existing = await browser.alarms.get(alarmName);
+  // Nao resorteia a cada consulta: so troca se o alvo mudou de verdade.
+  if (!existing || Math.abs(existing.scheduledTime - target) > 15000) {
+    await browser.alarms.create(alarmName, { when });
+    console.log(`${AT.LOG_PREFIX} Venda Turbinada em "${channel}": $vender todos agendado para ${new Date(when).toLocaleTimeString()} (evento termina ${new Date(endsAt).toLocaleTimeString()}).`);
+  }
+  return when;
+}
+
+async function runTurboSell(channel) {
+  if (sellingNow.has(channel)) return;
+  sellingNow.add(channel);
+  try {
+    const general = await getGeneralSettings();
+    const s = (await getAllChannelSettings())[channel] || null;
+    const cfg = AT.effectiveTurboSell(s, general);
+    if (!cfg.enabled) return;
+    const ev = await fetchActiveEvents(channel); // confere na hora se o evento segue ativo
+    const sell = turboSellEvent(ev);
+    if (!sell) {
+      console.log(`${AT.LOG_PREFIX} Venda Turbinada em "${channel}" ja acabou; nada vendido.`);
+      return;
+    }
+    const endsAt = ev.fetchedAt + Number(sell.seconds_remaining) * 1000;
+    const { gameState } = await browser.storage.local.get("gameState");
+    const soldEnd = ((gameState || {})[channel] || {}).turboSoldEndsAt;
+    if (soldEnd && Math.abs(soldEnd - endsAt) < SAME_EVENT_TOLERANCE_MS) return;
+    if (await checkChallenge("venda turbinada")) return;
+
+    const r = await enqueueCommand(channel, AT.SELL_ALL_COMMAND, { reason: `Venda Turbinada (x${sell.value})` });
+    if (r.ok) {
+      await mutateGameState(channel, (st) => {
+        st.turboSoldEndsAt = endsAt;
+      });
+      await notifyAutomation(`sell-auto:${channel}`, `💰 Venda Turbinada em ${channel}`, `Enviei ${AT.SELL_ALL_COMMAND} (x${sell.value}). Peixes na whitelist não são vendidos.`);
+    } else if (endsAt - Date.now() > 10000) {
+      // Falhou (ex: aba fechada): tenta de novo daqui a pouco, se ainda der tempo.
+      await browser.alarms.create(`${SELL_ALARM_PREFIX}${channel}`, { when: Date.now() + 5000 });
+    }
+  } finally {
+    sellingNow.delete(channel);
   }
 }
 
@@ -1309,12 +1516,16 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       await mutateGeneral((g) => {
         if ("defaultMaxJitterSeconds" in patch) g.defaultMaxJitterSeconds = clampJitterSeconds(patch.defaultMaxJitterSeconds);
         if ("notifyDuelInvites" in patch) g.notifyDuelInvites = !!patch.notifyDuelInvites;
+        if ("notifyAutomations" in patch) g.notifyAutomations = !!patch.notifyAutomations;
+        if (patch.duelAccept) g.duelAccept = AT.sanitizeDuelAccept({ ...g.duelAccept, ...patch.duelAccept });
+        if (patch.turboSell) g.turboSell = AT.sanitizeTurboSell({ ...g.turboSell, ...patch.turboSell });
         if (patch.semiAuto) {
           g.semiAuto = { ...g.semiAuto };
           if ("focusTab" in patch.semiAuto) g.semiAuto.focusTab = !!patch.semiAuto.focusTab;
           if ("notify" in patch.semiAuto) g.semiAuto.notify = !!patch.semiAuto.notify;
         }
       });
+      if (patch.turboSell) await reevaluateTurboSell();
       sendResponse({ general: await getGeneralSettings() });
     })();
     return true;
@@ -1399,7 +1610,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    const m = /^(semi|duel|event):([^:]+)/.exec(id);
+    const m = /^(semi|duel|duel-auto|sell-auto|event):([^:]+)/.exec(id);
     if (!m) return;
     const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);
@@ -1415,6 +1626,10 @@ browser.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name === AT.EVENTS_ALARM_NAME) {
     pollEvents();
+    return;
+  }
+  if (alarm.name.startsWith(SELL_ALARM_PREFIX)) {
+    runTurboSell(alarm.name.slice(SELL_ALARM_PREFIX.length));
     return;
   }
   if (alarm.name.startsWith(CHECK_ALARM_PREFIX)) {

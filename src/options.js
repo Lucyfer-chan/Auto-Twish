@@ -10,6 +10,69 @@ const defaultJitterValueEl = $("defaultJitterValue");
 const semiFocusEl = $("semiFocus");
 const semiNotifyEl = $("semiNotify");
 const notifyDuelEl = $("notifyDuel");
+const notifyAutomationsEl = $("notifyAutomations");
+
+// ---------------------------------------------------------------------------
+// Campos das automacoes (usados no padrao geral e nas excecoes dos canais).
+// save(patch) recebe so o que mudou.
+// ---------------------------------------------------------------------------
+function mountDuelEditor(host, save) {
+  const root = $("duelTemplate").content.firstElementChild.cloneNode(true);
+  host.appendChild(root);
+  const q = (sel) => root.querySelector(sel);
+  const el = {
+    enabled: q(".js-duel-enabled"),
+    fields: q(".js-duel-fields"),
+    rule: q(".js-duel-rule"),
+    valueField: q(".js-duel-value-field"),
+    valueLabel: q(".js-duel-value-label"),
+    value: q(".js-duel-value"),
+    hint: q(".js-duel-value-hint")
+  };
+  for (const r of AT.DUEL_RULES) {
+    const o = document.createElement("option");
+    o.value = r;
+    o.textContent = AT.DUEL_RULE_LABELS[r];
+    el.rule.appendChild(o);
+  }
+  let cfg = AT.sanitizeDuelAccept(null);
+  el.enabled.addEventListener("change", () => save({ enabled: el.enabled.checked }));
+  el.rule.addEventListener("change", () => save({ rule: el.rule.value }));
+  el.value.addEventListener("change", () => {
+    const key = cfg.rule === "minutes" ? "minutes" : "pct";
+    save({ [key]: el.value.value });
+  });
+  return function render(next) {
+    cfg = AT.sanitizeDuelAccept(next);
+    el.enabled.checked = cfg.enabled;
+    el.fields.hidden = !cfg.enabled;
+    if (document.activeElement !== el.rule) el.rule.value = cfg.rule;
+    el.valueField.hidden = cfg.rule === "always";
+    const isMin = cfg.rule === "minutes";
+    el.valueLabel.textContent = isMin ? "Mínimo (minutos para pescar)" : "Mínimo (% do CD da pesca)";
+    el.hint.textContent = isMin ? "de 1 a 60" : "de 1 a 100 — ex: 50 = só aceita se faltar metade ou mais";
+    if (document.activeElement !== el.value) el.value.value = isMin ? cfg.minutes : cfg.pct;
+  };
+}
+
+function mountSellEditor(host, save) {
+  const root = $("sellTemplate").content.firstElementChild.cloneNode(true);
+  host.appendChild(root);
+  const enabled = root.querySelector(".js-sell-enabled");
+  const fields = root.querySelector(".js-sell-fields");
+  const seconds = root.querySelector(".js-sell-seconds");
+  enabled.addEventListener("change", () => save({ enabled: enabled.checked }));
+  seconds.addEventListener("change", () => save({ secondsBeforeEnd: seconds.value }));
+  return function render(next) {
+    const cfg = AT.sanitizeTurboSell(next);
+    enabled.checked = cfg.enabled;
+    fields.hidden = !cfg.enabled;
+    if (document.activeElement !== seconds) seconds.value = cfg.secondsBeforeEnd;
+  };
+}
+
+const renderGeneralDuel = mountDuelEditor($("generalDuel"), (patch) => updateGeneral({ duelAccept: patch }));
+const renderGeneralSell = mountSellEditor($("generalSell"), (patch) => updateGeneral({ turboSell: patch }));
 
 $("version").textContent = `v ${browser.runtime.getManifest().version}`;
 
@@ -27,6 +90,9 @@ function renderGeneral() {
   semiFocusEl.checked = !!g.semiAuto.focusTab;
   semiNotifyEl.checked = !!g.semiAuto.notify;
   notifyDuelEl.checked = !!g.notifyDuelInvites;
+  notifyAutomationsEl.checked = !!g.notifyAutomations;
+  renderGeneralDuel(g.duelAccept);
+  renderGeneralSell(g.turboSell);
   $("loginInfo").textContent = g.twishLogin ? `conta reconhecida: ${g.twishLogin}` : "ainda não lida (abra o popup num canal estando logado no twish.com.br)";
 }
 
@@ -44,6 +110,7 @@ defaultJitterEl.addEventListener("change", () => updateGeneral({ defaultMaxJitte
 semiFocusEl.addEventListener("change", () => updateGeneral({ semiAuto: { focusTab: semiFocusEl.checked } }));
 semiNotifyEl.addEventListener("change", () => updateGeneral({ semiAuto: { notify: semiNotifyEl.checked } }));
 notifyDuelEl.addEventListener("change", () => updateGeneral({ notifyDuelInvites: notifyDuelEl.checked }));
+notifyAutomationsEl.addEventListener("change", () => updateGeneral({ notifyAutomations: notifyAutomationsEl.checked }));
 
 // ---------------------------------------------------------------------------
 // Canais
@@ -84,8 +151,20 @@ function createCard(name) {
     jitterValue: q(".js-jitter-value"),
     test: q(".js-test"),
     actionStatus: q(".js-action-status"),
-    remove: q(".js-remove")
+    remove: q(".js-remove"),
+    duelDefault: q(".js-duel-default"),
+    duelSummary: q(".js-duel-summary"),
+    duelHost: q(".js-duel-host"),
+    sellDefault: q(".js-sell-default"),
+    sellSummary: q(".js-sell-summary"),
+    sellHost: q(".js-sell-host")
   };
+  // Excecoes de automacao: desmarcar "usar o padrao geral" cria uma copia do
+  // padrao atual para este canal; marcar de novo apaga a excecao.
+  els.renderDuel = mountDuelEditor(els.duelHost, (patch) => updateChannel(name, { duelAccept: patch }));
+  els.renderSell = mountSellEditor(els.sellHost, (patch) => updateChannel(name, { turboSell: patch }));
+  els.duelDefault.addEventListener("change", () => updateChannel(name, { duelAccept: els.duelDefault.checked ? null : {} }));
+  els.sellDefault.addEventListener("change", () => updateChannel(name, { turboSell: els.sellDefault.checked ? null : {} }));
 
   els.name.textContent = name;
   els.name.href = `https://www.twitch.tv/${encodeURIComponent(name)}`;
@@ -169,6 +248,16 @@ function renderCard(name) {
     els.jitter.value = s.maxJitterSeconds;
     els.jitterValue.textContent = `${s.maxJitterSeconds}s`;
   }
+
+  const g = state.general;
+  els.duelDefault.checked = !s.duelAccept;
+  els.duelSummary.textContent = AT.describeDuelAccept(AT.sanitizeDuelAccept(g.duelAccept));
+  els.duelHost.hidden = !s.duelAccept;
+  if (s.duelAccept) els.renderDuel(s.duelAccept);
+  els.sellDefault.checked = !s.turboSell;
+  els.sellSummary.textContent = AT.describeTurboSell(AT.sanitizeTurboSell(g.turboSell));
+  els.sellHost.hidden = !s.turboSell;
+  if (s.turboSell) els.renderSell(s.turboSell);
 
   renderClock(name);
 }

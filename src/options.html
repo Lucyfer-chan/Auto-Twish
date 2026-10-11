@@ -237,6 +237,33 @@
     color: var(--text-muted);
     font-size: 12px;
   }
+  /* Automacoes */
+  .auto-block + .auto-block {
+    margin-top: 14px;
+  }
+  .auto-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin: 8px 0 0 26px;
+  }
+  .acq-field select {
+    width: 100%;
+  }
+  .auto-override {
+    margin-left: 26px;
+    margin-top: 6px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+  }
+  .auto-override .check-row:first-child {
+    margin-top: 0;
+  }
+  .auto-override .auto-fields {
+    margin-left: 0;
+  }
   @media (max-width: 560px) {
     .channel-grid {
       grid-template-columns: 1fr;
@@ -295,6 +322,19 @@
         </span>
       </label>
       <div class="hint">Os avisos de eventos (XP em Dobro, Maré Turbo etc.) se ligam em cada canal, abaixo.</div>
+    </div>
+  </section>
+
+  <h2>Automações — padrão geral</h2>
+  <section class="panel">
+    <div class="hint" style="margin-top:0">Tudo começa desligado. Cada canal pode ter uma exceção própria (no cartão do canal, abaixo). Os comandos são enviados no chat da Twitch — a aba do canal precisa estar aberta — um por vez, com intervalo aleatório entre eles, e param durante a verificação do Twish.</div>
+    <div id="generalDuel" class="setting"></div>
+    <div id="generalSell" class="setting"></div>
+    <div class="setting">
+      <label class="check-row" style="margin-top:0">
+        <input type="checkbox" id="notifyAutomations" />
+        <span>Avisar quando uma automação agir (duelo aceito, venda feita)</span>
+      </label>
     </div>
   </section>
 
@@ -426,6 +466,20 @@
     </label>
 
     <div class="setting" style="margin-top:14px">
+      <div class="setting-title">Automações neste canal</div>
+      <label class="check-row">
+        <input type="checkbox" class="js-duel-default" />
+        <span>Duelos: usar o padrão geral <span class="hint">(<span class="js-duel-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-duel-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-sell-default" />
+        <span>Venda Turbinada: usar o padrão geral <span class="hint">(<span class="js-sell-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-sell-host"></div>
+    </div>
+
+    <div class="setting">
       <label class="check-row" style="margin-top:0">
         <input type="checkbox" class="js-jitter-default" />
         <span>Usar o atraso padrão (<span class="js-default-value"></span>)</span>
@@ -443,6 +497,46 @@
       <button type="button" class="btn danger js-remove">Remover canal</button>
     </div>
   </section>
+</template>
+
+<template id="duelTemplate">
+  <div class="auto-block">
+    <label class="check-row" style="margin-top:0">
+      <input type="checkbox" class="js-duel-enabled" />
+      <span><strong>Aceitar duelos automaticamente</strong> <span class="hint">($aceitar)</span>
+        <span class="hint" style="display:block">Aceitar um duelo zera o CD da pesca — por isso dá pra exigir que ainda falte bastante tempo para pescar. Precisa da conta do Twish lida (logado no twish.com.br) para as regras de tempo.</span>
+      </span>
+    </label>
+    <div class="auto-fields js-duel-fields">
+      <div class="acq-field">
+        <label>Quando aceitar</label>
+        <select class="js-duel-rule"></select>
+      </div>
+      <div class="acq-field js-duel-value-field">
+        <label class="js-duel-value-label">Mínimo</label>
+        <input type="text" inputmode="numeric" autocomplete="off" class="js-duel-value" />
+        <div class="field-hint js-duel-value-hint"></div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="sellTemplate">
+  <div class="auto-block">
+    <label class="check-row" style="margin-top:0">
+      <input type="checkbox" class="js-sell-enabled" />
+      <span><strong>Venda Turbinada: vender tudo perto do fim</strong> <span class="hint">($vender todos)</span>
+        <span class="hint" style="display:block">Quando o evento Venda Turbinada estiver ativo, envia uma vez, pouco antes de acabar. Peixes protegidos com $whitelist não são vendidos pelo jogo.</span>
+      </span>
+    </label>
+    <div class="auto-fields js-sell-fields">
+      <div class="acq-field">
+        <label>Segundos antes do fim</label>
+        <input type="text" inputmode="numeric" autocomplete="off" class="js-sell-seconds" />
+        <div class="field-hint">de 5 a 600 (até 5 s a mais, aleatório)</div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script src="browser-polyfill.js"></script>
