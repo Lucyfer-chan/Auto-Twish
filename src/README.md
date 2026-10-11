@@ -1,4 +1,4 @@
-# Auto Twish — v 0.4.0
+# Auto Twish — v 0.4.1
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -184,11 +184,22 @@ Twitch precisa estar aberta.
   tem ou falta o anterior. Fora: Turbo Torneio e tickets.
 - Aviso opcional quando uma automação agir.
 
+## Instalação — Firefox normal (permanente, assinada)
+
+O Firefox normal só instala de vez extensões assinadas pela Mozilla.
+1. Em https://addons.mozilla.org/developers/ (conta Firefox), "Enviar uma nova
+   extensão" → "Por conta própria" (não aparece na loja) → envie o .zip.
+2. Baixe o .xpi assinado e instale em about:addons → engrenagem → "Instalar
+   extensão de arquivo…".
+3. Em about:addons → Auto Twish → Permissões, confira que o acesso a
+   twitch.tv e twish.com.br está ligado.
+Cada versão nova precisa ser assinada de novo e ter número maior.
+
 ## Instalação — Firefox (temporária, para testar)
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.4.0 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.4.1 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -256,6 +267,9 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.4.1** — Preparada para o Firefox normal: manifest declara
+  `data_collection_permissions: { required: ["none"] }` (exigência da Mozilla
+  para assinar). `web-ext lint`: 0 erros, 0 avisos.
 - **v 0.4.0 (estável)** — a v 0.3.11 promovida a estável. Reúne a Fase 4 até
   aqui: trava de segurança, Mercado (aquisição), fila de comandos, aceite de
   duelo, Venda Turbinada, Proteção ($whitelist) e Lista de Compras.

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Auto Twish",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Automatiza a pesca no Twish ($pescar no chat da Twitch), sincronizando com o cooldown real do site twish.com.br.",
   "permissions": [
     "storage",
@@ -44,7 +44,12 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "auto-twish@local.extension",
-      "strict_min_version": "115.0"
+      "strict_min_version": "115.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
     }
   },
   "options_ui": {
