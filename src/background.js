@@ -712,6 +712,9 @@ async function applyChannelSettings(channel, patch) {
     if ("duelAccept" in patch) {
       s.duelAccept = patch.duelAccept === null ? null : AT.sanitizeDuelAccept({ ...AT.effectiveDuelAccept(previous, stateCache && stateCache.general), ...patch.duelAccept });
     }
+    if ("shopList" in patch) {
+      s.shopList = patch.shopList === null ? null : AT.sanitizeShopList({ ...AT.effectiveShopList(previous, stateCache && stateCache.general), ...patch.shopList });
+    }
     if ("protection" in patch) {
       s.protection = patch.protection === null ? null : AT.sanitizeProtection({ ...AT.effectiveProtection(previous, stateCache && stateCache.general), ...patch.protection });
     }
@@ -761,6 +764,7 @@ async function applyChannelSettings(channel, patch) {
   if ("notifyEvents" in patch && settings.notifyEvents) refreshEvents(channel, false); // estado inicial, sem notificar o que ja estava rolando
   if ("turboSell" in patch) await reevaluateTurboSell(channel);
   if ("protection" in patch) onProtectionSettingsChanged(channel);
+  if ("shopList" in patch) await reevaluateShopping(channel);
   if (!settings.enabled || reschedules) {
     await scheduleDueAlarm(channel, settings.nextFireAt);
   }
@@ -1004,6 +1008,7 @@ async function refreshEvents(channel, notify) {
     console.log(`${AT.LOG_PREFIX} Evento(s) novo(s) em "${channel}":`, started);
   }
   await scheduleTurboSell(channel, ev);
+  if (typeof scheduleShopping === "function") await scheduleShopping(channel, ev);
   return ev;
 }
 
@@ -1011,7 +1016,9 @@ async function refreshEvents(channel, notify) {
 // (evento novo pode zerar o CD da pesca — ex: Mare Turbo) ou tiver
 // "Notificar eventos" ligado.
 function watchesEvents(s, general) {
-  return !!(s && (s.notifyEvents || s.enabled || AT.effectiveTurboSell(s, general).enabled));
+  if (!s) return false;
+  const shop = AT.effectiveShopList(s, general);
+  return !!(s.notifyEvents || s.enabled || AT.effectiveTurboSell(s, general).enabled || (shop.enabled && shop.items.length));
 }
 
 async function updateEventsPoller() {
@@ -1530,6 +1537,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (patch.duelAccept) g.duelAccept = AT.sanitizeDuelAccept({ ...g.duelAccept, ...patch.duelAccept });
         if (patch.turboSell) g.turboSell = AT.sanitizeTurboSell({ ...g.turboSell, ...patch.turboSell });
         if (patch.protection) g.protection = AT.sanitizeProtection({ ...g.protection, ...patch.protection });
+        if (patch.shopList) g.shopList = AT.sanitizeShopList({ ...g.shopList, ...patch.shopList });
         if (patch.semiAuto) {
           g.semiAuto = { ...g.semiAuto };
           if ("focusTab" in patch.semiAuto) g.semiAuto.focusTab = !!patch.semiAuto.focusTab;
@@ -1538,6 +1546,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
       if (patch.turboSell) await reevaluateTurboSell();
       if (patch.protection) onProtectionSettingsChanged(null);
+      if (patch.shopList) await reevaluateShopping(null);
       sendResponse({ general: await getGeneralSettings() });
     })();
     return true;
@@ -1622,7 +1631,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|event):([^:]+)/.exec(id);
+    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|event):([^:]+)/.exec(id);
     if (!m) return;
     const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);

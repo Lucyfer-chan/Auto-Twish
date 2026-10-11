@@ -320,6 +320,42 @@
     padding: 3px 8px;
     font-size: 11px;
   }
+  .shop-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: var(--bg);
+    margin-top: 8px;
+  }
+  .shop-item.off {
+    opacity: 0.55;
+  }
+  .shop-item .shop-prio {
+    font-family: var(--mono);
+    color: var(--text-faint);
+    min-width: 1.6em;
+  }
+  .shop-item .shop-text {
+    flex: 1;
+    min-width: 200px;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .shop-item .shop-text strong {
+    color: var(--text);
+    font-size: 13px;
+  }
+  .shop-form {
+    margin-top: 10px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
   @media (max-width: 560px) {
     .channel-grid {
       grid-template-columns: 1fr;
@@ -387,6 +423,7 @@
     <div id="generalDuel" class="setting"></div>
     <div id="generalSell" class="setting"></div>
     <div id="generalProtect" class="setting"></div>
+    <div id="generalShop" class="setting"></div>
     <div class="setting">
       <label class="check-row" style="margin-top:0">
         <input type="checkbox" id="notifyAutomations" />
@@ -539,6 +576,14 @@
         <span>Proteção: usar o padrão geral <span class="hint">(<span class="js-protect-summary"></span>)</span></span>
       </label>
       <div class="auto-override js-protect-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-shop-default" />
+        <span>Lista de Compras: usar o padrão geral <span class="hint">(<span class="js-shop-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-shop-host"></div>
+      <div class="protect-status js-shop-status-row">
+        <span class="js-shop-status"></span>
+      </div>
       <div class="protect-status js-protect-status-row">
         <span class="js-protect-status"></span>
         <button type="button" class="btn secondary small js-protect-check">Conferir agora</button>
@@ -627,6 +672,53 @@
   </div>
 </template>
 <datalist id="protectFishOptions"></datalist>
+
+<template id="shopTemplate">
+  <div class="auto-block">
+    <label class="check-row" style="margin-top:0">
+      <input type="checkbox" class="js-shop-enabled" />
+      <span><strong>Lista de Compras no Desconto na Loja</strong> <span class="hint">($comprar)</span>
+        <span class="hint" style="display:block">Quando começar um Desconto na Loja, compra os itens abaixo pelo chat, de cima para baixo (prioridade). Se as moedas não derem para um item, passa para o próximo. Uma vez por desconto. O saldo é de cada barco e é lido pela sua conta — sem estar logado no twish.com.br, não compra.</span>
+      </span>
+    </label>
+    <div class="js-shop-fields" style="margin-left:26px">
+      <div class="acq-fields" style="grid-template-columns:minmax(150px,240px)">
+        <div class="acq-field">
+          <label>Reserva de moedas</label>
+          <input type="text" inputmode="numeric" autocomplete="off" class="js-shop-reserve" />
+          <div class="field-hint">a lista nunca deixa o saldo abaixo disso (0 = sem reserva)</div>
+        </div>
+      </div>
+      <div class="js-shop-items"></div>
+      <div class="shop-form js-shop-form" hidden>
+        <div class="setting-title js-shop-form-title">Adicionar item</div>
+        <div class="acq-fields">
+          <div class="acq-field" style="grid-column:1/-1">
+            <label>Item</label>
+            <select class="js-shop-item"></select>
+          </div>
+          <div class="acq-field">
+            <label>Modo</label>
+            <select class="js-shop-mode"></select>
+          </div>
+          <div class="acq-field js-shop-qty-field">
+            <label class="js-shop-qty-label">Quantidade</label>
+            <input type="text" inputmode="numeric" autocomplete="off" class="js-shop-qty" />
+            <div class="field-hint js-shop-qty-hint"></div>
+          </div>
+        </div>
+        <div class="hint stale js-shop-error" role="alert"></div>
+        <div class="channel-actions" style="margin-top:10px">
+          <button type="button" class="btn js-shop-confirm">Confirmar e adicionar</button>
+          <button type="button" class="btn secondary js-shop-cancel">Cancelar</button>
+        </div>
+      </div>
+      <div class="channel-actions" style="margin-top:10px">
+        <button type="button" class="btn secondary js-shop-add">Adicionar item</button>
+      </div>
+    </div>
+  </div>
+</template>
 
 <script src="browser-polyfill.js"></script>
 <script src="shared.js"></script>

@@ -161,9 +161,222 @@ function mountProtectEditor(host, save) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Lista de Compras
+// ---------------------------------------------------------------------------
+let shopCatalog = [];
+const shopEditors = new Set(); // re-render ao chegar o catalogo
+async function loadShopCatalog() {
+  try {
+    const { list } = await browser.runtime.sendMessage({ type: "GET_SHOP_CATALOG" });
+    shopCatalog = Array.isArray(list) ? list : [];
+  } catch (e) {
+    shopCatalog = [];
+  }
+  for (const fn of shopEditors) fn();
+}
+function shopEntry(id) {
+  return shopCatalog.find((e) => e.id === id) || null;
+}
+function shopItemText(it) {
+  const e = shopEntry(it.itemId);
+  const cat = e ? AT.SHOP_CATEGORY_LABELS[e.category] : "";
+  const price = e ? (e.pricesByRod ? "preço conforme a vara" : `${e.cost} moedas sem desconto`) : "fora da loja deste canal?";
+  const what =
+    it.mode === "once"
+      ? `Compra única: ${it.quantity}`
+      : it.mode === "recurring"
+      ? `Recorrente: ${it.quantity} por desconto`
+      : "Recorrente sem limite: até acabar as moedas";
+  return { title: it.name, line: `${cat ? cat + " · " : ""}${price} · ${what}` };
+}
+
+function mountShopEditor(host, save) {
+  const root = $("shopTemplate").content.firstElementChild.cloneNode(true);
+  host.appendChild(root);
+  const q = (sel) => root.querySelector(sel);
+  const el = {
+    enabled: q(".js-shop-enabled"),
+    reserve: q(".js-shop-reserve"),
+    items: q(".js-shop-items"),
+    form: q(".js-shop-form"),
+    formTitle: q(".js-shop-form-title"),
+    item: q(".js-shop-item"),
+    mode: q(".js-shop-mode"),
+    qtyField: q(".js-shop-qty-field"),
+    qty: q(".js-shop-qty"),
+    qtyHint: q(".js-shop-qty-hint"),
+    error: q(".js-shop-error"),
+    confirm: q(".js-shop-confirm"),
+    cancel: q(".js-shop-cancel"),
+    add: q(".js-shop-add")
+  };
+  let cfg = AT.sanitizeShopList(null);
+  let editingKey = null;
+
+  for (const m of AT.SHOP_MODES) {
+    const o = document.createElement("option");
+    o.value = m;
+    o.textContent = AT.SHOP_MODE_LABELS[m];
+    el.mode.appendChild(o);
+  }
+  function fillItems() {
+    const keep = el.item.value;
+    el.item.innerHTML = "";
+    const ph = document.createElement("option");
+    ph.value = "";
+    ph.textContent = shopCatalog.length ? "— escolha um item —" : "carregando a loja… (precisa de pelo menos um canal configurado)";
+    el.item.appendChild(ph);
+    for (const cat of AT.SHOP_CATEGORIES) {
+      const items = shopCatalog.filter((e) => e.category === cat);
+      if (!items.length) continue;
+      const g = document.createElement("optgroup");
+      g.label = AT.SHOP_CATEGORY_LABELS[cat];
+      for (const e of items) {
+        const o = document.createElement("option");
+        o.value = e.id;
+        o.textContent = `${e.name} — ${e.pricesByRod ? "preço conforme a vara" : e.cost + " moedas"}`;
+        g.appendChild(o);
+      }
+      el.item.appendChild(g);
+    }
+    el.item.value = keep;
+  }
+  function syncFormFields() {
+    const e = shopEntry(el.item.value);
+    const single = !!(e && e.single);
+    if (single) el.mode.value = "once";
+    el.mode.disabled = single;
+    el.qtyField.hidden = el.mode.value === "unlimited";
+    el.qty.disabled = single;
+    if (single) el.qty.value = "1";
+    el.qtyHint.textContent = single
+      ? "item que se tem um só: compra 1 vez"
+      : el.mode.value === "once"
+      ? "total a comprar; depois o item fica concluído"
+      : "quanto comprar em cada Desconto na Loja";
+  }
+  function openForm(item) {
+    editingKey = item ? item.key : null;
+    el.formTitle.textContent = item ? `Editar ${item.name}` : "Adicionar item";
+    el.confirm.textContent = item ? "Salvar alterações" : "Confirmar e adicionar";
+    fillItems();
+    el.item.value = item ? item.itemId : "";
+    el.mode.value = item ? item.mode : "once";
+    el.qty.value = item && item.quantity ? item.quantity : "1";
+    el.error.textContent = "";
+    el.form.hidden = false;
+    el.add.hidden = true;
+    syncFormFields();
+  }
+  function closeForm() {
+    editingKey = null;
+    el.form.hidden = true;
+    el.add.hidden = false;
+  }
+  el.item.addEventListener("change", syncFormFields);
+  el.mode.addEventListener("change", syncFormFields);
+  el.add.addEventListener("click", () => openForm(null));
+  el.cancel.addEventListener("click", closeForm);
+  el.confirm.addEventListener("click", () => {
+    const e = shopEntry(el.item.value);
+    if (!e) {
+      el.error.textContent = "Escolha um item da loja.";
+      return;
+    }
+    const mode = e.single ? "once" : el.mode.value;
+    let quantity = null;
+    if (mode !== "unlimited") {
+      const t = String(el.qty.value).trim();
+      quantity = e.single ? 1 : /^\d+$/.test(t) ? Number(t) : NaN;
+      if (!(quantity >= 1 && quantity <= AT.SHOP_MAX_QTY)) {
+        el.error.textContent = `Quantidade: um número inteiro de 1 a ${AT.SHOP_MAX_QTY}.`;
+        return;
+      }
+    }
+    const entry = { itemId: e.id, name: e.name, mode, quantity, enabled: true };
+    let items;
+    if (editingKey) items = cfg.items.map((x) => (x.key === editingKey ? { ...x, ...entry } : x));
+    else items = [...cfg.items, { ...entry, key: `${e.id}-${Date.now().toString(36)}` }];
+    closeForm();
+    save({ items });
+  });
+  el.enabled.addEventListener("change", () => save({ enabled: el.enabled.checked }));
+  el.reserve.addEventListener("change", () => save({ reserve: el.reserve.value }));
+
+  function move(i, d) {
+    const items = [...cfg.items];
+    const j = i + d;
+    if (j < 0 || j >= items.length) return;
+    [items[i], items[j]] = [items[j], items[i]];
+    save({ items });
+  }
+  function renderItems() {
+    el.items.innerHTML = "";
+    if (!cfg.items.length) {
+      const p = document.createElement("div");
+      p.className = "chips-empty";
+      p.style.marginTop = "8px";
+      p.textContent = "Nenhum item na lista.";
+      el.items.appendChild(p);
+    }
+    cfg.items.forEach((it, i) => {
+      const row = document.createElement("div");
+      row.className = "shop-item" + (it.enabled ? "" : " off");
+      const prio = document.createElement("span");
+      prio.className = "shop-prio";
+      prio.textContent = `${i + 1}.`;
+      const text = document.createElement("div");
+      text.className = "shop-text";
+      const t = shopItemText(it);
+      const strong = document.createElement("strong");
+      strong.textContent = t.title;
+      text.append(strong, document.createElement("br"), t.line);
+      const act = document.createElement("label");
+      act.className = "acq-active";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = it.enabled;
+      cb.addEventListener("change", () => save({ items: cfg.items.map((x) => (x.key === it.key ? { ...x, enabled: cb.checked } : x)) }));
+      act.append(cb, " Ativo");
+      const mk = (label, title, fn, disabled) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn secondary small";
+        b.textContent = label;
+        b.title = title;
+        b.setAttribute("aria-label", title);
+        b.disabled = !!disabled;
+        b.addEventListener("click", fn);
+        return b;
+      };
+      row.append(
+        prio,
+        text,
+        act,
+        mk("↑", "Subir (mais prioridade)", () => move(i, -1), i === 0),
+        mk("↓", "Descer (menos prioridade)", () => move(i, 1), i === cfg.items.length - 1),
+        mk("Editar", "Editar", () => openForm(it)),
+        mk("Remover", "Remover da lista", () => save({ items: cfg.items.filter((x) => x.key !== it.key) }))
+      );
+      el.items.appendChild(row);
+    });
+  }
+  function render(next) {
+    if (next !== undefined) cfg = AT.sanitizeShopList(next);
+    el.enabled.checked = cfg.enabled;
+    if (document.activeElement !== el.reserve) el.reserve.value = cfg.reserve;
+    renderItems();
+    if (!el.form.hidden) fillItems();
+  }
+  shopEditors.add(() => render());
+  return render;
+}
+
 const renderGeneralDuel = mountDuelEditor($("generalDuel"), (patch) => updateGeneral({ duelAccept: patch }));
 const renderGeneralSell = mountSellEditor($("generalSell"), (patch) => updateGeneral({ turboSell: patch }));
 const renderGeneralProtect = mountProtectEditor($("generalProtect"), (patch) => updateGeneral({ protection: patch }));
+const renderGeneralShop = mountShopEditor($("generalShop"), (patch) => updateGeneral({ shopList: patch }));
 let gameState = {};
 
 $("version").textContent = `v ${browser.runtime.getManifest().version}`;
@@ -186,6 +399,7 @@ function renderGeneral() {
   renderGeneralDuel(g.duelAccept);
   renderGeneralSell(g.turboSell);
   renderGeneralProtect(g.protection);
+  renderGeneralShop(g.shopList);
   $("loginInfo").textContent = g.twishLogin ? `conta reconhecida: ${g.twishLogin}` : "ainda não lida (abra o popup num canal estando logado no twish.com.br)";
 }
 
@@ -258,6 +472,13 @@ function createCard(name) {
     protectStatus: q(".js-protect-status"),
     protectCheck: q(".js-protect-check")
   };
+  els.shopDefault = q(".js-shop-default");
+  els.shopSummary = q(".js-shop-summary");
+  els.shopHost = q(".js-shop-host");
+  els.shopStatusRow = q(".js-shop-status-row");
+  els.shopStatus = q(".js-shop-status");
+  els.renderShop = mountShopEditor(els.shopHost, (patch) => updateChannel(name, { shopList: patch }));
+  els.shopDefault.addEventListener("change", () => updateChannel(name, { shopList: els.shopDefault.checked ? null : {} }));
   els.renderProtect = mountProtectEditor(els.protectHost, (patch) => updateChannel(name, { protection: patch }));
   els.protectDefault.addEventListener("change", () => updateChannel(name, { protection: els.protectDefault.checked ? null : {} }));
   els.protectCheck.addEventListener("click", async () => {
@@ -370,12 +591,32 @@ function renderCard(name) {
   els.protectSummary.textContent = AT.describeProtection(AT.sanitizeProtection(g.protection));
   els.protectHost.hidden = !s.protection;
   if (s.protection) els.renderProtect(s.protection);
+  els.shopDefault.checked = !s.shopList;
+  els.shopSummary.textContent = AT.describeShopList(AT.sanitizeShopList(g.shopList));
+  els.shopHost.hidden = !s.shopList;
+  if (s.shopList) els.renderShop(s.shopList);
   renderProtectStatus(name);
 
   renderClock(name);
 }
 
+function renderShopStatus(name) {
+  const card = cards.get(name);
+  const s = state.channels[name];
+  if (!card || !s) return;
+  const cfg = AT.effectiveShopList(s, state.general);
+  const sh = (gameState[name] || {}).shop;
+  const show = cfg.enabled && cfg.items.length > 0;
+  card.els.shopStatusRow.hidden = !show;
+  if (!show) return;
+  card.els.shopStatus.textContent =
+    sh && sh.lastRunAt
+      ? `Última Lista de Compras (${new Date(sh.lastRunAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}): ${sh.lastMsg || ""}`
+      : "Lista de Compras: esperando o próximo Desconto na Loja.";
+}
+
 function renderProtectStatus(name) {
+  renderShopStatus(name);
   const card = cards.get(name);
   const s = state.channels[name];
   if (!card || !s) return;
@@ -439,6 +680,7 @@ async function loadState() {
     gameState = {};
   }
   loadProtectBestiary();
+  loadShopCatalog();
   renderGeneral();
   renderChannels();
 }

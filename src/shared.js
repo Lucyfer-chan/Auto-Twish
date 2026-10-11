@@ -72,6 +72,13 @@ AT.DEFAULT_GENERAL_SETTINGS = {
     enabled: false,
     fish: [] // [{ id, name }]
   },
+  // Lista de Compras (Road Map item 3, Desconto na Loja): compra pelo chat
+  // ($comprar) durante o evento, por ordem de prioridade (ordem da lista).
+  shopList: {
+    enabled: false,
+    reserve: 0, // a lista nunca deixa o saldo abaixo disso
+    items: [] // [{ key, itemId, name, mode: "once"|"recurring"|"unlimited", quantity, enabled }]
+  },
   semiAuto: {
     focusTab: true, // ao digitar, traz a aba (e a janela) da Twitch pra frente
     notify: true // mostra notificacao do sistema
@@ -174,6 +181,79 @@ AT.describeProtection = function (cfg) {
   return `ligado, ${n} espécie${n === 1 ? "" : "s"}`;
 };
 
+// ---------------------------------------------------------------------------
+// Lista de Compras
+// ---------------------------------------------------------------------------
+AT.BUY_COMMAND = "$comprar";
+// Categorias da loja que entram no desconto (as mesmas que o site usa).
+AT.SHOP_CATEGORIES = ["rods", "hooks", "backpacks", "baits", "boosters", "incubators", "fertilizers", "upkeep"];
+AT.SHOP_CATEGORY_LABELS = {
+  rods: "Varas",
+  hooks: "Anzóis",
+  backpacks: "Mochilas",
+  baits: "Iscas",
+  boosters: "Reforços",
+  incubators: "Incubadora",
+  fertilizers: "Fertilizantes",
+  upkeep: "Manutenção"
+};
+AT.SHOP_SINGLE_CATEGORIES = ["rods", "hooks", "backpacks"]; // itens que se tem 1 so (compra unica, quantidade 1)
+AT.SHOP_MODES = ["once", "recurring", "unlimited"];
+AT.SHOP_MODE_LABELS = {
+  once: "Compra única",
+  recurring: "Recorrente (quantidade por desconto)",
+  unlimited: "Recorrente sem limite (até acabar as moedas)"
+};
+AT.SHOP_MAX_QTY = 999;
+
+AT.sanitizeShopItem = function (e) {
+  if (!e || typeof e !== "object") return null;
+  const itemId = typeof e.itemId === "string" ? e.itemId.trim().toLowerCase() : "";
+  if (!AT.FISH_ID_RE.test(itemId)) return null;
+  const mode = AT.SHOP_MODES.includes(e.mode) ? e.mode : "once";
+  return {
+    key: typeof e.key === "string" && e.key ? e.key.slice(0, 40) : `${itemId}-${Math.random().toString(36).slice(2, 8)}`,
+    itemId,
+    name: typeof e.name === "string" && e.name.trim() ? e.name.trim().slice(0, 60) : itemId,
+    mode,
+    quantity: mode === "unlimited" ? null : AT.clampInt(e.quantity, 1, AT.SHOP_MAX_QTY, 1),
+    enabled: e.enabled !== false
+  };
+};
+
+AT.sanitizeShopList = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  const items = [];
+  const keys = new Set();
+  for (const raw of Array.isArray(o.items) ? o.items : []) {
+    const it = AT.sanitizeShopItem(raw);
+    if (!it || keys.has(it.key)) continue;
+    keys.add(it.key);
+    items.push(it);
+    if (items.length >= 50) break;
+  }
+  return { enabled: !!o.enabled, reserve: AT.clampInt(o.reserve, 0, 10000000, 0), items };
+};
+AT.effectiveShopList = function (channelSettings, general) {
+  const own = channelSettings && channelSettings.shopList;
+  return AT.sanitizeShopList(own || (general || AT.DEFAULT_GENERAL_SETTINGS).shopList);
+};
+AT.describeShopList = function (cfg) {
+  const n = cfg.items.filter((i) => i.enabled).length;
+  const txt = `${n} ite${n === 1 ? "m" : "ns"}${cfg.reserve ? `, reserva ${cfg.reserve}` : ""}`;
+  return cfg.enabled ? `ligado, ${txt}` : n ? `desligado, ${txt}` : "desligado";
+};
+
+// Preco com desconto, igual ao site: arredonda o meio para o par.
+AT.discountedPrice = function (cost, rate) {
+  if (!rate) return cost;
+  const s = cost * (1 - rate);
+  const r = Math.floor(s);
+  const f = s - r;
+  const c = f > 0.5 ? r + 1 : f < 0.5 || r % 2 === 0 ? r : r + 1;
+  return Math.max(0, c);
+};
+
 AT.describeDuelAccept = function (cfg) {
   if (!cfg.enabled) return "desligado";
   if (cfg.rule === "always") return "ligado, sempre";
@@ -194,6 +274,7 @@ AT.mergeGeneral = function (saved) {
     duelAccept: AT.sanitizeDuelAccept(g.duelAccept),
     turboSell: AT.sanitizeTurboSell(g.turboSell),
     protection: AT.sanitizeProtection(g.protection),
+    shopList: AT.sanitizeShopList(g.shopList),
     market: { ...AT.DEFAULT_GENERAL_SETTINGS.market, ...(g.market || {}) }
   };
 };
@@ -209,6 +290,7 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   duelAccept: null, // null = usa o valor geral; objeto = excecao deste canal
   turboSell: null, // idem
   protection: null, // idem
+  shopList: null, // idem
   twishAvailableAt: null, // ultimo horario real de disponibilidade lido do Twish
   twishLastSeen: null, // quando essa leitura foi feita (gravado no maximo 1x/min durante o mesmo cooldown)
   lastSentAt: null, // ultimo envio local bem-sucedido
