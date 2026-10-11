@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Twish",
+  "version": "0.1.2",
+  "description": "Automatiza a pesca no Twish ($pescar no chat da Twitch), sincronizando com o cooldown real do site twish.com.br.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.twitch.tv/*",
+    "*://twish.com.br/*",
+    "*://*.twish.com.br/*"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.twitch.tv/*"
+      ],
+      "js": [
+        "browser-polyfill.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Auto Twish"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "twitch-auto-chat@local.extension",
+      "strict_min_version": "115.0"
+    }
+  }
+}

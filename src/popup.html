@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<title>Auto Twish</title>
+<style>
+  body {
+    width: 300px;
+    font-family: system-ui, sans-serif;
+    background: #18181b;
+    color: #efeff1;
+    padding: 12px;
+  }
+  h1 {
+    font-size: 14px;
+    margin: 0 0 10px;
+    color: #a970ff;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    margin: 10px 0 4px;
+    color: #adadb8;
+  }
+  select {
+    width: 100%;
+    box-sizing: border-box;
+    background: #0e0e10;
+    color: #efeff1;
+    border: 1px solid #3a3a3d;
+    border-radius: 4px;
+    padding: 6px;
+    font-size: 13px;
+  }
+  input[type="range"] {
+    width: 100%;
+    accent-color: #9147ff;
+    margin-top: 2px;
+  }
+  .jitter-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .jitter-label span {
+    color: #a970ff;
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 12px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .row label {
+    margin: 0;
+  }
+  .channel-label {
+    font-size: 12px;
+    background: #0e0e10;
+    border: 1px solid #3a3a3d;
+    border-radius: 4px;
+    padding: 8px;
+    line-height: 1.4;
+  }
+  .channel-label.muted {
+    color: #adadb8;
+  }
+  .channel-label strong {
+    color: #a970ff;
+  }
+  .hint {
+    font-size: 10px;
+    color: #adadb8;
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+  .hint.ok {
+    color: #7cffb2;
+  }
+  .hint.stale {
+    color: #f0ad4e;
+  }
+  button {
+    margin-top: 12px;
+    width: 100%;
+    background: #9147ff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 8px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: #3a3a3d;
+    margin-top: 6px;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  #countdown {
+    font-size: 15px;
+    font-family: "SF Mono", Consolas, monospace;
+    color: #a970ff;
+    text-align: center;
+    margin-top: 10px;
+    letter-spacing: 0.5px;
+  }
+  #countdown.muted {
+    color: #6a6a6d;
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+  }
+  #checking {
+    font-size: 10px;
+    font-family: "SF Mono", Consolas, monospace;
+    color: #6a6a6d;
+    text-align: center;
+    margin-top: 2px;
+  }
+  #status {
+    font-size: 11px;
+    color: #6a6a6d;
+    margin-top: 4px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <h1>Auto Twish <span id="version" style="font-size:11px;font-weight:normal;color:#6a6a6d;"></span></h1>
+
+  <div id="channelLabel" class="channel-label muted">Carregando canal…</div>
+
+  <div class="row">
+    <input type="checkbox" id="enabled" />
+    <label for="enabled">Ativado neste canal</label>
+  </div>
+
+  <label for="mode">Modo</label>
+  <select id="mode">
+    <option value="manual">Manual — só vara + atraso</option>
+    <option value="auto">Automático — sincroniza com a aba do Twish</option>
+  </select>
+  <div id="twishStatus" class="hint"></div>
+
+  <label for="rod">Vara (velocidade)</label>
+  <select id="rod">
+    <option value="vara_bambu">Vara de Bambu — a cada 10 min</option>
+    <option value="vara_madeira">Vara de Madeira Reforçada — a cada 9 min</option>
+    <option value="vara_fibra">Vara de Fibra de Vidro — a cada 8 min</option>
+    <option value="vara_aco">Vara de Aço — a cada 7 min</option>
+    <option value="vara_carbono">Vara de Carbono — a cada 6 min</option>
+    <option value="vara_encantada">Vara Encantada — a cada 5 min</option>
+    <option value="vara_abissal">Vara Abissal — a cada 4 min</option>
+    <option value="vara_lendaria">Vara Lendária — a cada 3 min</option>
+    <option value="vara_njord">Vara Njord — a cada 2 min</option>
+  </select>
+  <div class="jitter-label">
+    <label for="jitter" style="margin:0;">Atraso aleatório máximo</label>
+    <span id="jitterValue">10s</span>
+  </div>
+  <input type="range" id="jitter" min="1" max="100" step="1" value="10" />
+  <div class="hint">Cada envio soma de 0 até esse valor ao tempo da vara escolhida, pra não ficar num ritmo robótico. No modo automático (ou ao salvar com uma aba do Twish aberta), a vara equipada é detectada e selecionada aqui sozinha — a seleção manual só vale enquanto não houver detecção. Mensagem enviada: <strong>$pescar</strong>.</div>
+
+  <button id="save">Salvar para este canal</button>
+  <button id="testNow" class="secondary">Enviar uma agora (teste)</button>
+
+  <div id="countdown" class="muted"></div>
+  <div id="checking"></div>
+  <div id="status"></div>
+
+  <script src="browser-polyfill.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
