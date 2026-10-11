@@ -54,27 +54,47 @@ function formatRemaining(ms) {
   );
 }
 
+let lastTwishSync = null; // resultado da ultima sincronizacao explicita ({ found, availableAt, rodId, at })
+
+function formatClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+// Mostra, em qualquer modo, se a aba do Twish desse canal foi encontrada
+// na ultima sincronizacao e o que foi lido dela.
 function renderTwishStatus(settings) {
-  if (modeEl.value !== "auto") {
-    twishStatusEl.textContent = "";
-    twishStatusEl.className = "hint";
+  const sync = lastTwishSync;
+  if (sync && sync.found) {
+    let what;
+    if (sync.availableAt === null) {
+      what = "aba encontrada, mas o título não foi reconhecido";
+    } else if (sync.availableAt <= sync.at + 1000) {
+      what = "pesca disponível";
+    } else {
+      what = `cooldown de ${formatClock(sync.availableAt - sync.at)} no momento da leitura`;
+    }
+    const rod = sync.rodId ? "vara detectada" : "vara não detectada";
+    twishStatusEl.textContent = `Twish: sincronizado — ${what}; ${rod}.`;
+    twishStatusEl.className = "hint ok";
     return;
   }
 
-  const lastSeen = settings?.twishLastSeen;
-  if (!lastSeen) {
-    twishStatusEl.textContent = "Twish: nenhuma aba encontrada para este canal ainda. Abra a página de inventário do Twish desse canal.";
+  if (sync && !sync.found) {
+    twishStatusEl.textContent = "Twish: nenhuma aba aberta para este canal. Abra a página de inventário do Twish desse canal" +
+      (modeEl.value === "auto" ? " — até lá, o modo automático usa a estimativa da vara." : ".");
     twishStatusEl.className = "hint stale";
     return;
   }
 
-  const age = Date.now() - lastSeen;
-  if (age < TWISH_FRESH_MS) {
-    twishStatusEl.textContent = "Twish: sincronizado com a aba aberta.";
+  // Ainda sem sincronizacao explicita nesta abertura do popup.
+  const lastSeen = settings?.twishLastSeen;
+  if (lastSeen && Date.now() - lastSeen < TWISH_FRESH_MS) {
+    twishStatusEl.textContent = "Twish: sincronizando…";
     twishStatusEl.className = "hint ok";
   } else {
-    twishStatusEl.textContent = "Twish: dado antigo (aba pode estar fechada) — usando estimativa da vara por enquanto.";
-    twishStatusEl.className = "hint stale";
+    twishStatusEl.textContent = "Twish: sincronizando…";
+    twishStatusEl.className = "hint";
   }
 }
 
@@ -96,16 +116,21 @@ function stopTicking() {
 async function syncTwish() {
   if (!currentChannel) return null;
   try {
-    const { settings } = await browser.runtime.sendMessage({
+    const { settings, twish } = await browser.runtime.sendMessage({
       type: "SYNC_TWISH_FOR_CHANNEL",
       channel: currentChannel
     });
-    if (!settings) return null;
+    lastTwishSync = twish ? { ...twish, at: Date.now() } : null;
 
-    modeEl.dataset.twishLastSeen = settings.twishLastSeen || "";
-    if (settings.rod) rodEl.value = settings.rod;
+    if (settings) {
+      modeEl.dataset.twishLastSeen = settings.twishLastSeen || "";
+      if (settings.rod) rodEl.value = settings.rod;
+      mainTarget = settings.enabled ? settings.nextFireAt : mainTarget;
+    } else if (twish?.rodId) {
+      // Canal ainda nao salvo: so pre-seleciona a vara detectada no formulario.
+      rodEl.value = twish.rodId;
+    }
     renderTwishStatus(settings);
-    mainTarget = settings.enabled ? settings.nextFireAt : mainTarget;
     return settings;
   } catch (e) {
     return null;
@@ -184,12 +209,7 @@ jitterEl.addEventListener("input", () => {
 });
 
 modeEl.addEventListener("change", async () => {
-  renderTwishStatus({
-    twishLastSeen: modeEl.dataset.twishLastSeen ? Number(modeEl.dataset.twishLastSeen) : null
-  });
-  if (modeEl.value === "auto") {
-    await syncTwish();
-  }
+  await syncTwish(); // sincroniza ao trocar pra qualquer modo
 });
 
 async function load() {

@@ -1,4 +1,4 @@
-# Auto Twish — v 0.1.4
+# Auto Twish — v 0.1.5
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -57,9 +57,17 @@ Cada canal pode rodar em um de dois modos, escolhidos no popup:
   automático se comporta como o manual, sem travar esperando indefinidamente.
 
 A extensão também **busca ativamente** a aba do Twish (não só espera o
-título mudar sozinho) nestes momentos: ao abrir o popup, ao trocar pra
-"Automático" no seletor, e ao clicar em "Salvar" — assim a sincronização
-não depende de esperar a próxima atualização do relógio da página.
+título mudar sozinho) nestes momentos: ao abrir o popup, ao trocar o modo e
+ao clicar em "Salvar" — **em qualquer modo, ativada ou não**. O popup mostra o
+resultado da leitura ("Twish: sincronizado — pesca disponível; vara
+detectada", "nenhuma aba aberta para este canal", etc.).
+
+- **Sincronização ativa** (popup / trocar modo / salvar): vale para os dois
+  modos — se o canal estiver ativado, o agendamento é corrigido pelo cooldown
+  real.
+- **Acompanhamento contínuo** (título mudando, checagem de 1 em 1 minuto):
+  só no modo automático. No manual, entre uma abertura do popup e outra, vale
+  a estimativa da vara.
 
 **Vara equipada**: nesses mesmos momentos, a extensão também lê qual vara
 está equipada na página do Twish (procura o slot com classe `is-equipped`)
@@ -70,8 +78,7 @@ vara manualmente se a aba do Twish estiver aberta.
 e salva, o Twish já mostrar a pesca disponível (sem cooldown pendente), a
 extensão dispara o primeiro `$pescar` na hora — **em qualquer modo**, manual
 ou automático — sem esperar o atraso aleatório (esse atraso só entra pra
-disfarçar o ritmo dos envios *seguintes*). No modo manual o dado do Twish só
-é usado nesse primeiro disparo; depois segue a estimativa da vara.
+disfarçar o ritmo dos envios *seguintes*).
 
 **Autocorreção**: no modo automático, se o agendamento estiver mais tarde do
 que o cooldown real permite (ex: o TwishGameBot não respondeu ao último
@@ -89,7 +96,7 @@ aviso ("Twish: sincronizado com a aba aberta" / "nenhuma aba encontrada" /
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.1.4 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.1.5 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -182,6 +189,16 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.1.5** — sincronização com o Twish em qualquer modo.
+  - Abrir o popup, trocar o modo e salvar agora sincronizam com a aba do Twish
+    em qualquer modo, ativada ou não (antes, na prática, só ao salvar no
+    automático e ativada). No modo manual ativado, o agendamento também é
+    corrigido pelo cooldown real nesses momentos.
+  - Salvar com a extensão desativada também lê a vara equipada e o cooldown.
+  - Canal ainda nunca salvo: a vara equipada já vem pré-selecionada no popup.
+  - Status do Twish no popup nos dois modos, mostrando o que foi lido (aba
+    encontrada ou não, pesca disponível ou cooldown, vara detectada ou não).
+  - Log no console do background a cada sincronização, para diagnóstico.
 - **v 0.1.4** — correção dos bugs da lista de implementações em andamento.
   - Corrigido: no modo automático, a extensão se reativava sozinha quando o CD
     zerava, mesmo depois de desativada. Causa: várias rotinas gravavam a

@@ -290,11 +290,13 @@ function resolveRodId(info) {
 async function syncTwishForChannel(channel) {
   let availableAt = null;
   let rodId = null;
+  let found = false; // achou alguma aba do Twish desse canal?
 
   try {
     const tabs = await browser.tabs.query({ url: TWISH_URL_PATTERNS });
     for (const tab of tabs) {
       if (extractChannelFromTwishUrl(tab.url || "") !== channel) continue;
+      found = true;
 
       if (availableAt === null) {
         const parsed = parseTwishTitle(tab.title || "");
@@ -314,15 +316,23 @@ async function syncTwishForChannel(channel) {
     console.warn("[Auto Twish] Falha ao sincronizar com abas do Twish:", e);
   }
 
-  return { availableAt, rodId };
+  console.log(
+    `[Auto Twish] Sincronizacao com o Twish ("${channel}"): ` +
+    (found
+      ? `aba encontrada; ${availableAt === null ? "titulo nao reconhecido" : availableAt <= Date.now() + 1000 ? "pesca disponivel" : `disponivel as ${new Date(availableAt).toLocaleTimeString()}`}; vara ${rodId || "nao detectada"}`
+      : "nenhuma aba do Twish aberta para esse canal")
+  );
+  return { found, availableAt, rodId };
 }
 
 // Registra uma leitura de cooldown do Twish para um canal e, se esse canal
-// estiver ativado em modo automatico, corrige nextFireAt com o horario
-// real (+ o atraso configurado). Ignora leituras "disponivel agora" que
+// estiver ativado, corrige nextFireAt com o horario real (+ o atraso
+// configurado). Leituras passivas (titulo mudando, heartbeat) so corrigem
+// no modo automatico; leituras explicitas (abrir o popup, trocar o modo)
+// corrigem em qualquer modo. Ignora leituras "disponivel agora" que
 // cheguem logo apos um envio nosso (o titulo ainda nao foi atualizado pelo
 // TwishGameBot, entao a leitura e velha).
-async function recordTwishCooldown(channel, availableAt) {
+async function recordTwishCooldown(channel, availableAt, explicit = false) {
   const rescheduled = await mutateChannels((channels) => {
     const settings = channels[channel];
     if (!settings) return null; // canal ainda nao configurado na extensao
@@ -342,7 +352,8 @@ async function recordTwishCooldown(channel, availableAt) {
     settings.twishAvailableAt = availableAt;
     settings.twishLastSeen = now;
 
-    if (!settings.enabled || settings.mode !== "auto") return null;
+    if (!settings.enabled) return null;
+    if (settings.mode !== "auto" && !explicit) return null; // manual so segue o Twish em sincronizacao explicita
 
     const justSent = settings.lastSentAt && now - settings.lastSentAt < JUST_SENT_GUARD_MS;
     const isFreshCooldown = availableAt > now + 3000;
@@ -429,8 +440,9 @@ async function applyChannelSettings(channel, formSettings) {
 
   // Busca dado fresco do Twish (cooldown real E vara equipada) ANTES de
   // entrar na fila de escrita — a leitura da pagina pode demorar e nao
-  // deve segurar as outras gravacoes.
-  const twish = enabled ? await syncTwishForChannel(channel) : { availableAt: null, rodId: null };
+  // deve segurar as outras gravacoes. Sincroniza sempre, ativado ou nao,
+  // em qualquer modo.
+  const twish = await syncTwishForChannel(channel);
 
   const settings = await mutateChannels((channels) => {
     const previous = channels[channel] || {};
@@ -448,15 +460,15 @@ async function applyChannelSettings(channel, formSettings) {
       nextFireAt: null
     };
 
-    if (enabled) {
-      if (twish.availableAt !== null) {
-        s.twishAvailableAt = twish.availableAt;
-        s.twishLastSeen = now;
-      }
-      if (twish.rodId) {
-        s.rod = twish.rodId; // vara equipada detectada tem prioridade sobre a selecao manual
-      }
+    if (twish.availableAt !== null) {
+      s.twishAvailableAt = twish.availableAt;
+      s.twishLastSeen = now;
+    }
+    if (twish.rodId) {
+      s.rod = twish.rodId; // vara equipada detectada tem prioridade sobre a selecao manual
+    }
 
+    if (enabled) {
       const twishFresh =
         s.twishAvailableAt !== null && s.twishLastSeen && now - s.twishLastSeen < TWISH_DATA_FRESH_MS;
       const availableNow = twishFresh && s.twishAvailableAt <= now + 1000;
@@ -466,9 +478,9 @@ async function applyChannelSettings(channel, formSettings) {
         // em qualquer modo, sem somar o atraso aleatorio (ele existe pra
         // disfarcar o ritmo dos envios recorrentes, nao o primeiro).
         s.nextFireAt = now;
-      } else if (twishFresh && (mode === "auto" || isActivating)) {
-        // Automatico sempre segue o Twish; no manual, o dado real so e usado
-        // no momento de ativar (depois segue so a estimativa da vara).
+      } else if (twishFresh) {
+        // Salvar e uma sincronizacao explicita: usa o cooldown real em
+        // qualquer modo.
         s.nextFireAt = Math.max(now, s.twishAvailableAt) + computeJitterMs(s);
       } else {
         s.nextFireAt = now + computeDelayMs(s);
@@ -606,29 +618,25 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "SYNC_TWISH_FOR_CHANNEL") {
     (async () => {
       const channel = msg.channel;
+      const twish = await syncTwishForChannel(channel);
       const existing = (await getAllChannelSettings())[channel];
-      if (!existing) {
-        // Canal ainda nunca foi salvo nesta extensao; nada pra atualizar
-        // ainda (o primeiro Salvar ja faz a sincronizacao inicial).
-        sendResponse({ settings: null });
-        return;
+
+      if (existing) {
+        if (twish.availableAt !== null) {
+          // Sincronizacao explicita: corrige o agendamento em qualquer modo
+          // (respeitando "mesmo cooldown" e "acabou de enviar").
+          await recordTwishCooldown(channel, twish.availableAt, true);
+        }
+        if (twish.rodId) {
+          await mutateChannels((channels) => {
+            if (channels[channel]) channels[channel].rod = twish.rodId;
+          });
+        }
       }
+      // Canal nunca salvo: nao grava nada, mas devolve o que foi lido
+      // (o popup usa pra pre-selecionar a vara e mostrar o status).
 
-      const { availableAt, rodId } = await syncTwishForChannel(channel);
-
-      if (availableAt !== null) {
-        // Mesma logica do titulo mudando (respeita "mesmo cooldown" e
-        // "acabou de enviar"), mas tambem corrige agendamento errado.
-        await recordTwishCooldown(channel, availableAt);
-      }
-
-      if (rodId) {
-        await mutateChannels((channels) => {
-          if (channels[channel]) channels[channel].rod = rodId;
-        });
-      }
-
-      sendResponse({ settings: await getChannelSettings(channel) });
+      sendResponse({ settings: existing ? await getChannelSettings(channel) : null, twish });
     })();
     return true;
   }
