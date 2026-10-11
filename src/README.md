@@ -1,4 +1,4 @@
-# Auto Twish — v 0.5.3
+# Auto Twish — v 1.0.0
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -213,7 +213,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.5.3 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 1.0.0 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -269,10 +269,9 @@ o código pronto caso um dia se queira rodar em Chromium.
 - A extensão simula digitação no campo de chat da página; se a Twitch mudar o
   HTML/CSS do site, os seletores em `content.js` podem parar de funcionar e
   vão precisar de atualização.
-- `document.execCommand` está formalmente depreciado nos navegadores, mas
-  ainda funciona nos engines atuais; se algum dia for removido, o
-  `content.js` vai precisar simular os eventos `input`/`beforeinput`
-  manualmente.
+- O texto entra no chat pelo evento `beforeinput`, que o editor da Twitch
+  (Slate) registra; `document.execCommand` (depreciado, mas ainda presente)
+  fica só como reserva.
 - É preciso ter uma aba da Twitch aberta e logada no navegador — não funciona
   em segundo plano se todas as abas da Twitch estiverem fechadas.
 - Mensagens idênticas consecutivas costumam ser bloqueadas pelo próprio chat
@@ -281,6 +280,9 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 1.0.0 (lançamento)** — a v 0.5.3 promovida a versão de lançamento, nas
+  duas variantes (Firefox e Chrome), com tudo funcionando nas duas. Código
+  idêntico à v 0.5.3.
 - **v 0.5.3** — Chrome: o envio continuava falhando na 0.5.2. Causa real: no
   Chrome o content script roda num mundo isolado, e o editor do chat da Twitch
   não aceita eventos vindos de lá. Agora, no Chrome, digitar e enviar rodam
