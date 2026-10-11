@@ -64,6 +64,35 @@
     text-align: center;
     min-height: 1em;
   }
+  .game {
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .game-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    line-height: 1.35;
+  }
+  .game-line .label {
+    color: var(--text-muted);
+  }
+  .game-line strong {
+    color: var(--text);
+  }
+  .game-line.warn strong {
+    color: var(--warn);
+  }
+  .btn.small {
+    padding: 3px 8px;
+    font-size: 11px;
+    flex: none;
+  }
   #openOptions {
     width: 100%;
     margin-top: 12px;
@@ -101,6 +130,15 @@
     <div id="checking"></div>
   </div>
   <div id="twishStatus" class="hint"></div>
+
+  <div id="game" class="game" hidden>
+    <div id="eventLine" class="game-line" hidden></div>
+    <div class="game-line">
+      <span><span class="label">Peixe em destaque:</span> <strong id="featuredFish">—</strong> <span id="featuredAge" class="label"></span></span>
+      <button id="askFeatured" class="btn secondary small" title="Envia $destaque no chat">Consultar</button>
+    </div>
+    <div id="duelLine" class="game-line warn" hidden></div>
+  </div>
 
   <button id="openOptions" class="btn secondary">Configurações</button>
   <div id="status"></div>

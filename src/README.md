@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.1
+# Auto Twish — v 0.3.2
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -63,8 +63,19 @@ configurações:
 
 Comportamentos comuns:
 
+- **Leitura pela sua conta**: com você logado no twish.com.br neste Firefox,
+  a extensão lê o cooldown real e a vara equipada direto da API do jogo
+  (`/api/<canal>/me`), sem precisar da aba do Twish daquele canal aberta. Se
+  não conseguir, tenta de dentro de qualquer aba do twish.com.br aberta e,
+  por último, pelo título da aba do canal. No automático e no semi, confere a
+  conta logo antes de enviar (se ainda houver cooldown, reagenda em vez de
+  enviar) e alguns segundos depois de pescar (acerta o próximo horário).
+- **CD zerado**: aceitar um duelo, entrar num torneio ou começar a Maré Turbo
+  zeram o CD da pesca. Quando você manda um comando `$...` no chat, ou quando
+  um evento começa, a extensão confere a conta e reagenda para logo se o CD
+  zerou.
 - **Sincronização ativa**: ao abrir o popup, trocar o modo, ativar ou trocar
-  a vara, a extensão lê a aba do Twish na hora, em qualquer modo (o popup
+  a vara, a extensão lê o Twish na hora, em qualquer modo (o popup
   mostra o resultado: "Twish: sincronizado — pesca disponível; vara
   detectada", "nenhuma aba aberta para este canal", etc.). O
   **acompanhamento contínuo** (título mudando, checagem de 1 em 1 minuto) é só
@@ -80,11 +91,32 @@ Comportamentos comuns:
   qualquer modo, a extensão reinicia o contador a partir dali e não envia
   outro durante o cooldown.
 
+## Jogo: eventos, peixe em destaque e duelos
+
+O popup tem uma área "Jogo" com:
+
+- **Evento ativo** no canal (ex: "⚡ XP em Dobro — termina em 08:32"), lido
+  da API pública do Twish. Em cada canal da página de configurações dá para
+  ligar "Notificar quando começar um evento neste canal" (desligado por
+  padrão). A consulta é 1x por minuto, só para canais ativados ou com aviso
+  de eventos ligado.
+- **Peixe em destaque**: lido da resposta do TwishGameBot ao `$destaque` no
+  chat (de quem quer que tenha pedido). O botão **Consultar** envia o
+  `$destaque` quando você clica.
+- **Duelo**: convite pendente para você ("@fulano te desafiou — 04:12 pra
+  usar $aceitar") e, depois que um duelo seu termina, "Próximo duelo em
+  mm:ss" (30 min). A notificação de convite liga nas Configurações Gerais
+  (desligada por padrão). Para reconhecer convites para você, a extensão
+  precisa ter lido sua conta pelo menos uma vez.
+
+A leitura do chat só olha mensagens do TwishGameBot e precisa da aba do
+canal na Twitch aberta.
+
 ## Instalação — Firefox (temporária, para testar)
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.1 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.2 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -152,6 +184,17 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.2** — Fase 3 do Road Map: leitura do jogo.
+  - Sincronização pela conta do jogador (API `/api/<canal>/me`): cooldown e
+    vara sem precisar da aba do canal; conferência antes e depois de enviar
+    no automático e no semi.
+  - Eventos ativos no popup e notificação opcional de início de evento por
+    canal (item 5).
+  - Peixe em destaque no popup + botão Consultar (`$destaque`) (item 8).
+  - Convite de duelo para você e cooldown de 30 min depois de um duelo
+    (item 9); notificação de convite opcional.
+  - CD da pesca zerado por `$aceitar`, torneio ou Maré Turbo é detectado e
+    reagendado.
 - **v 0.3.1** — Fase 2 do Road Map: interface nova e modo semi-automático.
   - Popup reduzido: ativar, modo (Manual/Automático/Semi), vara (só no
     manual), contador, status do Twish e botão Configurações. Aplica na hora.

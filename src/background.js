@@ -349,10 +349,97 @@ function resolveRodId(info) {
   return null;
 }
 
-// Procura, entre as abas do Twish abertas agora, uma que corresponda ao
-// canal pedido, e devolve tanto o horario real de disponibilidade quanto
-// a vara equipada (cada um null se nao foi possivel descobrir).
+// ---------------------------------------------------------------------------
+// API do Twish (dados da conta do jogador)
+//
+// GET https://twish.com.br/api/<canal>/me (precisa estar logado no site)
+// traz, entre outros: cooldown_remaining (segundos), equipment.rod_id, login.
+// Tenta primeiro direto daqui (com os cookies do jogador); se nao der, faz a
+// mesma consulta de dentro de qualquer aba aberta do twish.com.br.
+// ---------------------------------------------------------------------------
+const POST_SEND_CHECK_DELAY_MS = 8 * 1000; // depois de pescar, espera o bot registrar antes de conferir
+const CHECK_ALARM_PREFIX = "auto-twish-check:";
+
+function isValidMe(j) {
+  return j && typeof j === "object" && typeof j.cooldown_remaining === "number";
+}
+
+async function fetchTwishMe(channel) {
+  const url = `https://twish.com.br/api/${encodeURIComponent(channel)}/me`;
+
+  try {
+    const r = await fetch(url, { credentials: "include", cache: "no-store" });
+    if (r.ok) {
+      const j = await r.json();
+      if (isValidMe(j)) return { data: j, via: "conta" };
+    }
+  } catch (e) {
+    // sem rede / bloqueado: tenta pela aba
+  }
+
+  try {
+    const tabs = await browser.tabs.query({ url: TWISH_URL_PATTERNS });
+    for (const tab of tabs) {
+      if (tab.id === undefined) continue;
+      try {
+        const results = await browser.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (u) =>
+            fetch(u, { credentials: "include", cache: "no-store" })
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null),
+          args: [url]
+        });
+        const j = results?.[0]?.result;
+        if (isValidMe(j)) return { data: j, via: "conta (pela aba)" };
+      } catch (e) {
+        // aba sem permissao/fechando: tenta a proxima
+      }
+    }
+  } catch (e) {
+    // ignora
+  }
+  return null;
+}
+
+// Converte a resposta de /me no formato usado aqui.
+function parseTwishMe(me) {
+  const d = me.data;
+  const remainingMs = Math.max(0, d.cooldown_remaining) * 1000;
+  const rodId = d.equipment && AT.ROD_MINUTES[d.equipment.rod_id] !== undefined ? d.equipment.rod_id : null;
+  return { availableAt: Date.now() + remainingMs, rodId, login: d.login || null, via: me.via };
+}
+
+// Guarda o login do jogador no Twish (o mesmo em todos os canais); usado
+// pra saber quando um convite de duelo e pra ele.
+async function rememberTwishLogin(login) {
+  if (!login) return;
+  await mutateGeneral((g) => {
+    g.twishLogin = String(login).toLowerCase();
+  });
+}
+
+// Procura dados do Twish pro canal: primeiro pela conta (API), depois pelo
+// titulo da aba aberta. Devolve o horario real de disponibilidade e a vara
+// equipada (cada um null se nao foi possivel descobrir).
 async function syncTwishForChannel(channel) {
+  const me = await fetchTwishMe(channel);
+  if (me) {
+    const parsed = parseTwishMe(me);
+    await rememberTwishLogin(parsed.login);
+    console.log(
+      `${AT.LOG_PREFIX} Sincronizacao com o Twish ("${channel}") pela ${parsed.via}: ` +
+        (parsed.availableAt <= Date.now() + 1000 ? "pesca disponivel" : `disponivel as ${new Date(parsed.availableAt).toLocaleTimeString()}`) +
+        `; vara ${parsed.rodId || "nao detectada"}`
+    );
+    return { found: true, availableAt: parsed.availableAt, rodId: parsed.rodId, source: "api" };
+  }
+  const fromTab = await syncTwishFromTab(channel);
+  return { ...fromTab, source: fromTab.found ? "tab" : null };
+}
+
+// Plano B: titulo da aba do Twish + vara lida da pagina.
+async function syncTwishFromTab(channel) {
   let availableAt = null;
   let rodId = null;
   let found = false; // achou alguma aba do Twish desse canal?
@@ -384,7 +471,7 @@ async function syncTwishForChannel(channel) {
   }
 
   console.log(
-    `${AT.LOG_PREFIX} Sincronizacao com o Twish ("${channel}"): ` +
+    `${AT.LOG_PREFIX} Sincronizacao com o Twish ("${channel}") pela aba (API indisponivel — logado no twish.com.br?): ` +
     (found
       ? `aba encontrada; ${availableAt === null ? `titulo nao reconhecido (${JSON.stringify(rawTitle)})` : availableAt <= Date.now() + 1000 ? "pesca disponivel" : `disponivel as ${new Date(availableAt).toLocaleTimeString()}`}; vara ${rodId || "nao detectada"}`
       : "nenhuma aba do Twish aberta para esse canal")
@@ -483,7 +570,7 @@ async function syncAllTwishTabs() {
 // content.js confirmou que o texto foi digitado e o envio foi disparado.
 // NAO confirma que o TwishGameBot de fato respondeu — so que o envio
 // local (Twitch) funcionou.
-async function attemptSend(channel) {
+async function attemptSend(channel, text = FIXED_MESSAGE) {
   const tabs = await browser.tabs.query({ url: "*://*.twitch.tv/*" });
   const targets = tabs.filter((t) => extractChannelFromUrl(t.url) === channel);
 
@@ -497,7 +584,7 @@ async function attemptSend(channel) {
 
   for (const tab of targets) {
     try {
-      const result = await browser.tabs.sendMessage(tab.id, { type: "SEND_CHAT_MESSAGE", text: FIXED_MESSAGE });
+      const result = await browser.tabs.sendMessage(tab.id, { type: "SEND_CHAT_MESSAGE", text });
       if (result?.ok) {
         anyOk = true;
       } else {
@@ -536,6 +623,7 @@ async function applyChannelSettings(channel, patch) {
     if ("enabled" in patch) s.enabled = !!patch.enabled;
     if ("mode" in patch) s.mode = AT.MODES.includes(patch.mode) ? patch.mode : "manual";
     if ("rod" in patch) s.rod = AT.ROD_MINUTES[patch.rod] !== undefined ? patch.rod : DEFAULT_ROD;
+    if ("notifyEvents" in patch) s.notifyEvents = !!patch.notifyEvents;
     if ("maxJitterSeconds" in patch) {
       s.maxJitterSeconds = patch.maxJitterSeconds === null ? null : clampJitterSeconds(patch.maxJitterSeconds);
     }
@@ -575,6 +663,8 @@ async function applyChannelSettings(channel, patch) {
   });
 
   await updateHeartbeat();
+  await updateEventsPoller();
+  if ("notifyEvents" in patch && settings.notifyEvents) refreshEvents(channel, false); // estado inicial, sem notificar o que ja estava rolando
   if (!settings.enabled || reschedules) {
     await scheduleDueAlarm(channel, settings.nextFireAt);
   }
@@ -594,6 +684,7 @@ async function removeChannel(channel) {
   await scheduleDueAlarm(channel, null);
   clearSemiNotification(channel);
   await updateHeartbeat();
+  await updateEventsPoller();
 }
 
 // Grava o resultado de um envio (feito FORA da fila de escrita, porque
@@ -725,7 +816,163 @@ async function recordUserSent(channel) {
   if (nextFireAt === undefined) return;
   clearSemiNotification(channel);
   await scheduleDueAlarm(channel, nextFireAt);
+  schedulePostSendCheck(channel);
   console.log(`${AT.LOG_PREFIX} "${channel}": ${FIXED_MESSAGE} enviado pelo jogador; proximo as ${new Date(nextFireAt).toLocaleTimeString()}.`);
+}
+
+// ---------------------------------------------------------------------------
+// Estado do jogo por canal (eventos, peixe em destaque, convite de duelo).
+// Fica numa chave propria (gameState), separada das configuracoes.
+// ---------------------------------------------------------------------------
+let gameStateQueue = Promise.resolve();
+
+function mutateGameState(channel, fn) {
+  const run = gameStateQueue.then(async () => {
+    const { gameState } = await browser.storage.local.get("gameState");
+    const all = gameState || {};
+    const before = JSON.stringify(all[channel] || {});
+    const cur = all[channel] || {};
+    const out = await fn(cur);
+    if (JSON.stringify(cur) !== before) {
+      all[channel] = cur;
+      await browser.storage.local.set({ gameState: all });
+    }
+    return out;
+  });
+  gameStateQueue = run.catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao gravar estado do jogo:`, e));
+  return run;
+}
+
+// Eventos: API publica do Twish (nao precisa de login).
+async function fetchActiveEvents(channel) {
+  try {
+    const r = await fetch(`https://twish.com.br/api/${encodeURIComponent(channel)}/events/active`, { cache: "no-store" });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return { event: j.event || null, grande_evento: j.grande_evento || null, fetchedAt: Date.now() };
+  } catch (e) {
+    return null;
+  }
+}
+
+function eventKeys(ev) {
+  const keys = [];
+  if (ev && ev.event) keys.push(`event:${ev.event.name}`);
+  if (ev && ev.grande_evento) keys.push(`grande:${ev.grande_evento.name}`);
+  return keys;
+}
+
+// Atualiza os eventos de um canal; se notify, avisa os que acabaram de comecar.
+async function refreshEvents(channel, notify) {
+  const ev = await fetchActiveEvents(channel);
+  if (!ev) return null;
+  const started = await mutateGameState(channel, (st) => {
+    const oldKeys = eventKeys(st.events);
+    // So guarda o que mudou de fato (o tempo restante muda a cada consulta).
+    const sameSet = JSON.stringify(oldKeys) === JSON.stringify(eventKeys(ev));
+    if (!sameSet || !st.events) st.events = ev;
+    else if (ev.event || ev.grande_evento) st.events = ev; // atualiza o tempo restante enquanto houver evento
+    return eventKeys(ev).filter((k) => !oldKeys.includes(k));
+  });
+  if (notify && started.length) {
+    for (const item of [ev.grande_evento, ev.event].filter(Boolean)) {
+      try {
+        await browser.notifications.create(`event:${channel}:${item.name}`, {
+          type: "basic",
+          title: `${item.emoji || "🎉"} ${item.name} em ${channel}`,
+          message: `${item.message ? item.message + " — " : ""}termina em ${AT.formatRemaining(item.seconds_remaining * 1000)}.`
+        });
+      } catch (e) {
+        console.warn(`${AT.LOG_PREFIX} Falha ao notificar evento:`, e);
+      }
+    }
+    console.log(`${AT.LOG_PREFIX} Evento(s) novo(s) em "${channel}":`, started);
+  }
+  return ev;
+}
+
+// Consulta de eventos: 1x por minuto, enquanto algum canal estiver ativado
+// (evento novo pode zerar o CD da pesca — ex: Mare Turbo) ou tiver
+// "Notificar eventos" ligado.
+function watchesEvents(s) {
+  return !!(s && (s.notifyEvents || s.enabled));
+}
+
+async function updateEventsPoller() {
+  const channels = await getAllChannelSettings();
+  const any = Object.values(channels).some(watchesEvents);
+  const existing = await browser.alarms.get(AT.EVENTS_ALARM_NAME);
+  if (any && !existing) await browser.alarms.create(AT.EVENTS_ALARM_NAME, { periodInMinutes: 1 });
+  else if (!any && existing) await browser.alarms.clear(AT.EVENTS_ALARM_NAME);
+}
+
+async function pollEvents() {
+  const channels = await getAllChannelSettings();
+  for (const [channel, s] of Object.entries(channels)) {
+    if (!watchesEvents(s)) continue;
+    const before = await browser.storage.local.get("gameState");
+    const hadKeys = eventKeys(((before.gameState || {})[channel] || {}).events);
+    const ev = await refreshEvents(channel, !!s.notifyEvents);
+    const isNew = ev && eventKeys(ev).some((k) => !hadKeys.includes(k));
+    // Evento comecando pode zerar o CD da pesca (ex: Mare Turbo): confere a conta.
+    if (isNew && s.enabled) schedulePostSendCheck(channel, 3000);
+  }
+}
+
+// Mensagens do TwishGameBot lidas no chat (content.js).
+async function onFeaturedFish(channel, fish) {
+  await mutateGameState(channel, (st) => {
+    st.featured = { fish, seenAt: Date.now() };
+  });
+  console.log(`${AT.LOG_PREFIX} Peixe em destaque em "${channel}": ${fish}`);
+}
+
+async function onDuelInvite(channel, challenger, target, windowSeconds) {
+  const general = await getGeneralSettings();
+  if (!general.twishLogin || target.toLowerCase() !== general.twishLogin) return; // convite pra outra pessoa
+  const expiresAt = Date.now() + windowSeconds * 1000;
+  await mutateGameState(channel, (st) => {
+    st.duelInvite = { from: challenger, expiresAt };
+  });
+  console.log(`${AT.LOG_PREFIX} Convite de duelo em "${channel}" de @${challenger} (${windowSeconds}s pra aceitar).`);
+  if (general.notifyDuelInvites) {
+    try {
+      await browser.notifications.create(`duel:${channel}`, {
+        type: "basic",
+        title: `⚔️ Duelo em ${channel}`,
+        message: `@${challenger} te desafiou! Você tem ${AT.formatRemaining(windowSeconds * 1000)} pra usar $aceitar.`
+      });
+    } catch (e) {
+      console.warn(`${AT.LOG_PREFIX} Falha ao notificar duelo:`, e);
+    }
+  }
+}
+
+async function onDuelEnd(channel, winner, loser) {
+  const general = await getGeneralSettings();
+  const me = general.twishLogin;
+  if (!me || (winner.toLowerCase() !== me && loser.toLowerCase() !== me)) return; // duelo de outras pessoas
+  const until = Date.now() + AT.DUEL_COOLDOWN_MS;
+  await mutateGameState(channel, (st) => {
+    st.duelCooldownUntil = until;
+    delete st.duelInvite;
+  });
+  try {
+    browser.notifications.clear(`duel:${channel}`);
+  } catch (e) {}
+  console.log(`${AT.LOG_PREFIX} Duelo terminou em "${channel}" (${winner} venceu ${loser}); proximo duelo as ${new Date(until).toLocaleTimeString()}.`);
+}
+
+// O jogador mandou um comando que nao e o de pesca (ex: $aceitar, entrar em
+// torneio): alguns zeram o CD da pesca, entao confere a conta logo depois.
+async function onUserOtherCommand(channel, text) {
+  if (/^\$aceitar\b/i.test(text)) {
+    await mutateGameState(channel, (st) => {
+      delete st.duelInvite;
+    });
+  }
+  const s = (await getAllChannelSettings())[channel];
+  if (s && s.enabled) schedulePostSendCheck(channel, 5000);
 }
 
 // Ponto unico de disparo, usado tanto pelo alarme dedicado quanto pelo
@@ -745,6 +992,21 @@ async function processChannelIfDue(channel, source) {
     if (settings.awaitingUser) return; // semi: ja digitado, esperando o jogador
     if (settings.nextFireAt && Date.now() < settings.nextFireAt) return; // ainda nao esta na hora
 
+    // Auto/semi: confere o cooldown real pela conta antes de agir, pra
+    // nunca mandar o comando durante o cooldown.
+    if (AT.followsTwish(settings.mode)) {
+      const me = await fetchTwishMe(channel);
+      if (me) {
+        const parsed = parseTwishMe(me);
+        const remainingMs = parsed.availableAt - Date.now();
+        if (remainingMs > 1500) {
+          const next = await rescheduleTo(channel, parsed.availableAt);
+          console.log(`${AT.LOG_PREFIX} (${source}) "${channel}" ainda em cooldown pela conta (${Math.round(remainingMs / 1000)}s); reagendado para ${next ? new Date(next).toLocaleTimeString() : "-"}.`);
+          return;
+        }
+      }
+    }
+
     if (settings.mode === "semi") {
       await prepareSemiAuto(channel, source);
       return;
@@ -752,6 +1014,7 @@ async function processChannelIfDue(channel, source) {
 
     const result = await attemptSend(channel);
     const nextFireAt = await recordSendResult(channel, result.ok);
+    if (result.ok && AT.followsTwish(settings.mode)) schedulePostSendCheck(channel);
 
     if (!result.ok) {
       console.warn(`${AT.LOG_PREFIX} (${source}) Falha ao enviar para "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
@@ -764,6 +1027,33 @@ async function processChannelIfDue(channel, source) {
   } finally {
     inFlightChannels.delete(channel);
   }
+}
+
+// Reagenda o canal pro horario real informado pelo Twish (+ atraso).
+async function rescheduleTo(channel, availableAt) {
+  const next = await mutateChannels((channels) => {
+    const s = channels[channel];
+    if (!s || !s.enabled) return null;
+    s.twishAvailableAt = availableAt;
+    s.twishLastSeen = Date.now();
+    s.nextFireAt = Math.max(Date.now(), availableAt) + computeJitterMs(s);
+    return s.nextFireAt;
+  });
+  if (next) await scheduleDueAlarm(channel, next);
+  return next;
+}
+
+// Alguns segundos depois de pescar, confere pela conta o cooldown novo e
+// acerta o proximo horario (vale mesmo sem a aba do Twish aberta).
+function schedulePostSendCheck(channel, delayMs = POST_SEND_CHECK_DELAY_MS) {
+  browser.alarms.create(`${CHECK_ALARM_PREFIX}${channel}`, { when: Date.now() + delayMs });
+}
+
+async function postSendCheck(channel) {
+  const me = await fetchTwishMe(channel);
+  if (!me) return; // sem API: fica a estimativa da vara (e o titulo da aba, se aberta)
+  const parsed = parseTwishMe(me);
+  await recordTwishCooldown(channel, parsed.availableAt, true);
 }
 
 // Rede de seguranca: varre todos os canais ativos a cada 1 min. So deve
@@ -802,6 +1092,7 @@ async function clearLegacyAlarms() {
 async function bootstrap() {
   await clearLegacyAlarms();
   await updateHeartbeat();
+  await updateEventsPoller();
   await restoreDueAlarms();
   await syncAllTwishTabs();
 }
@@ -870,6 +1161,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const patch = msg.patch || {};
       await mutateGeneral((g) => {
         if ("defaultMaxJitterSeconds" in patch) g.defaultMaxJitterSeconds = clampJitterSeconds(patch.defaultMaxJitterSeconds);
+        if ("notifyDuelInvites" in patch) g.notifyDuelInvites = !!patch.notifyDuelInvites;
         if (patch.semiAuto) {
           g.semiAuto = { ...g.semiAuto };
           if ("focusTab" in patch.semiAuto) g.semiAuto.focusTab = !!patch.semiAuto.focusTab;
@@ -886,10 +1178,44 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // Vem do content.js: mensagens do TwishGameBot lidas no chat.
+  if (msg?.type === "CHAT_FEATURED_FISH" || msg?.type === "CHAT_DUEL_INVITE" || msg?.type === "CHAT_DUEL_END") {
+    const channel = extractChannelFromUrl(sender?.tab?.url || "");
+    if (!channel) return false;
+    if (msg.type === "CHAT_FEATURED_FISH" && msg.fish) onFeaturedFish(channel, String(msg.fish).slice(0, 60));
+    if (msg.type === "CHAT_DUEL_END" && msg.winner && msg.loser) onDuelEnd(channel, String(msg.winner), String(msg.loser));
+    if (msg.type === "CHAT_DUEL_INVITE" && msg.challenger && msg.target) {
+      onDuelInvite(channel, String(msg.challenger), String(msg.target), Math.max(1, Number(msg.windowSeconds) || 300));
+    }
+    return false;
+  }
+
+  // Popup: estado do jogo do canal (atualiza os eventos na hora).
+  if (msg?.type === "GET_GAME_STATE") {
+    (async () => {
+      await refreshEvents(msg.channel, false);
+      const { gameState } = await browser.storage.local.get("gameState");
+      sendResponse({ state: (gameState || {})[msg.channel] || {} });
+    })();
+    return true;
+  }
+
+  // Popup: envia um comando avulso no chat (ex: $destaque), so quando o jogador clica.
+  if (msg?.type === "SEND_CHAT_COMMAND") {
+    const allowed = ["$destaque"];
+    if (!allowed.includes(msg.text)) {
+      sendResponse({ ok: false, reason: "comando-nao-permitido" });
+      return false;
+    }
+    attemptSend(msg.channel, msg.text).then((r) => sendResponse(r));
+    return true;
+  }
+
   // Vem do content.js: o jogador enviou o comando de pesca manualmente.
   if (msg?.type === "USER_SENT_COMMAND") {
     const channel = extractChannelFromUrl(sender?.tab?.url || "");
     if (channel && msg.text === FIXED_MESSAGE) recordUserSent(channel);
+    else if (channel && typeof msg.text === "string" && msg.text.startsWith("$")) onUserOtherCommand(channel, msg.text);
     return false;
   }
 
@@ -910,8 +1236,9 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    if (!id.startsWith("semi:")) return;
-    const channel = id.slice(5);
+    const m = /^(semi|duel|event):([^:]+)/.exec(id);
+    if (!m) return;
+    const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);
     if (tab) await focusTab(tab);
     browser.notifications.clear(id);
@@ -921,6 +1248,14 @@ if (browser.notifications && browser.notifications.onClicked) {
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEARTBEAT_NAME) {
     heartbeatTick();
+    return;
+  }
+  if (alarm.name === AT.EVENTS_ALARM_NAME) {
+    pollEvents();
+    return;
+  }
+  if (alarm.name.startsWith(CHECK_ALARM_PREFIX)) {
+    postSendCheck(alarm.name.slice(CHECK_ALARM_PREFIX.length));
     return;
   }
   const channel = channelFromDueAlarmName(alarm.name);

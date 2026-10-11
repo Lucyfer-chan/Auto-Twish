@@ -9,6 +9,7 @@ const defaultJitterEl = $("defaultJitter");
 const defaultJitterValueEl = $("defaultJitterValue");
 const semiFocusEl = $("semiFocus");
 const semiNotifyEl = $("semiNotify");
+const notifyDuelEl = $("notifyDuel");
 
 $("version").textContent = `v ${browser.runtime.getManifest().version}`;
 
@@ -25,6 +26,8 @@ function renderGeneral() {
   defaultJitterValueEl.textContent = `${defaultJitterEl.value}s`;
   semiFocusEl.checked = !!g.semiAuto.focusTab;
   semiNotifyEl.checked = !!g.semiAuto.notify;
+  notifyDuelEl.checked = !!g.notifyDuelInvites;
+  $("loginInfo").textContent = g.twishLogin ? `conta reconhecida: ${g.twishLogin}` : "ainda não lida (abra o popup num canal estando logado no twish.com.br)";
 }
 
 async function updateGeneral(patch) {
@@ -40,6 +43,7 @@ defaultJitterEl.addEventListener("input", () => {
 defaultJitterEl.addEventListener("change", () => updateGeneral({ defaultMaxJitterSeconds: Number(defaultJitterEl.value) }));
 semiFocusEl.addEventListener("change", () => updateGeneral({ semiAuto: { focusTab: semiFocusEl.checked } }));
 semiNotifyEl.addEventListener("change", () => updateGeneral({ semiAuto: { notify: semiNotifyEl.checked } }));
+notifyDuelEl.addEventListener("change", () => updateGeneral({ notifyDuelInvites: notifyDuelEl.checked }));
 
 // ---------------------------------------------------------------------------
 // Canais
@@ -72,6 +76,7 @@ function createCard(name) {
     modeButtons: [...root.querySelectorAll(".js-mode button")],
     rodField: q(".js-rod-field"),
     rod: q(".js-rod"),
+    notifyEvents: q(".js-notify-events"),
     jitterDefault: q(".js-jitter-default"),
     defaultValue: q(".js-default-value"),
     jitterRow: q(".js-jitter-row"),
@@ -98,6 +103,7 @@ function createCard(name) {
     });
   }
   els.rod.addEventListener("change", () => updateChannel(name, { rod: els.rod.value }));
+  els.notifyEvents.addEventListener("change", () => updateChannel(name, { notifyEvents: els.notifyEvents.checked }));
 
   els.jitterDefault.addEventListener("change", () => {
     // Desmarcar cria uma excecao comecando no valor padrao atual.
@@ -152,6 +158,8 @@ function renderCard(name) {
   for (const b of els.modeButtons) b.setAttribute("aria-checked", String(b.dataset.mode === s.mode));
   els.rodField.hidden = s.mode !== "manual"; // a vara so aparece no modo manual
   if (document.activeElement !== els.rod) els.rod.value = s.rod || AT.DEFAULT_ROD;
+
+  els.notifyEvents.checked = !!s.notifyEvents;
 
   const usesDefault = s.maxJitterSeconds === null || s.maxJitterSeconds === undefined;
   els.jitterDefault.checked = usesDefault;

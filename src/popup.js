@@ -34,6 +34,7 @@ let current = null; // configuracoes do canal atual (como estao no background)
 let heartbeatTarget = null;
 let renderTimer = null;
 let lastTwishSync = null; // { found, availableAt, rodId, at }
+let gameState = {}; // { events, featured, duelInvite } do canal atual
 
 // ---------------------------------------------------------------------------
 // Desenho
@@ -110,7 +111,7 @@ function renderTwishStatus() {
   }
   if (!sync.found) {
     twishStatusEl.textContent =
-      "Twish: nenhuma aba aberta para este canal. Abra a página de inventário do Twish desse canal" +
+      "Twish: não consegui ler sua conta nem uma aba deste canal. Entre (faça login) no twish.com.br neste Firefox" +
       (current && AT.followsTwish(current.mode) ? " — até lá, vale a estimativa da vara." : ".");
     twishStatusEl.className = "hint stale";
     return;
@@ -126,7 +127,8 @@ function renderTwishStatus() {
     sync.availableAt <= sync.at + 1000
       ? "pesca disponível"
       : `cooldown de ${formatClock(sync.availableAt - sync.at)} no momento da leitura`;
-  twishStatusEl.textContent = `Twish: sincronizado — ${what}; ${rod}.`;
+  const via = sync.source === "api" ? "pela sua conta" : "pela aba";
+  twishStatusEl.textContent = `Twish: sincronizado ${via} — ${what}; ${rod}.`;
   twishStatusEl.className = "hint ok";
 }
 
@@ -144,11 +146,88 @@ function startTicking() {
   if (renderTimer) clearTimeout(renderTimer);
   const tick = () => {
     renderCountdown();
+    renderGame();
     const target = current && current.nextFireAt;
     const ms = target ? ((target - Date.now()) % 1000 + 1000) % 1000 || 1000 : 1000;
     renderTimer = setTimeout(tick, ms + 5);
   };
   tick();
+}
+
+function ago(ms) {
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "agora há pouco";
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  return `há ${h} h`;
+}
+
+// Area "Jogo": evento ativo, peixe em destaque e convite de duelo.
+function renderGame() {
+  $("game").hidden = !currentChannel;
+  if (!currentChannel) return;
+  const now = Date.now();
+
+  const ev = gameState.events;
+  const items = [];
+  if (ev) {
+    const elapsed = now - (ev.fetchedAt || now);
+    for (const item of [ev.grande_evento, ev.event]) {
+      if (!item) continue;
+      const remaining = item.seconds_remaining * 1000 - elapsed;
+      if (remaining > 0) items.push({ item, remaining });
+    }
+  }
+  const eventLine = $("eventLine");
+  eventLine.hidden = items.length === 0;
+  eventLine.textContent = "";
+  for (const { item, remaining } of items) {
+    const span = document.createElement("span");
+    span.append(`${item.emoji || "🎉"} `);
+    const strong = document.createElement("strong");
+    strong.textContent = item.name;
+    span.append(strong, ` — termina em ${AT.formatRemaining(remaining)}`);
+    eventLine.append(span);
+  }
+
+  const f = gameState.featured;
+  $("featuredFish").textContent = f ? f.fish : "—";
+  $("featuredAge").textContent = f ? `(${ago(now - f.seenAt)})` : "";
+
+  // Duelo: convite pendente tem prioridade; senao, cooldown de duelo.
+  const duel = gameState.duelInvite;
+  const duelLine = $("duelLine");
+  const duelLeft = duel ? duel.expiresAt - now : 0;
+  const cdLeft = gameState.duelCooldownUntil ? gameState.duelCooldownUntil - now : 0;
+  duelLine.textContent = "";
+  duelLine.classList.toggle("warn", duelLeft > 0);
+  if (duel && duelLeft > 0) {
+    const span = document.createElement("span");
+    const strong = document.createElement("strong");
+    strong.textContent = `⚔️ @${duel.from} te desafiou`;
+    span.append(strong, ` — ${AT.formatRemaining(duelLeft)} pra usar $aceitar`);
+    duelLine.append(span);
+    duelLine.hidden = false;
+  } else if (cdLeft > 0) {
+    const span = document.createElement("span");
+    span.className = "label";
+    span.textContent = `⚔️ Próximo duelo em ${AT.formatRemaining(cdLeft)}`;
+    duelLine.append(span);
+    duelLine.hidden = false;
+  } else {
+    duelLine.hidden = true;
+  }
+}
+
+async function loadGame() {
+  if (!currentChannel) return;
+  try {
+    const { state } = await browser.runtime.sendMessage({ type: "GET_GAME_STATE", channel: currentChannel });
+    gameState = state || {};
+  } catch (e) {
+    gameState = {};
+  }
+  renderGame();
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +280,10 @@ async function update(patch) {
 // O popup e avisado quando algo muda (envio feito, reagendamento...), em
 // vez de perguntar ao background a cada segundo.
 browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.gameState && currentChannel) {
+    gameState = (changes.gameState.newValue || {})[currentChannel] || {};
+    renderGame();
+  }
   if (area !== "local" || !changes.channels || !currentChannel) return;
   const s = (changes.channels.newValue || {})[currentChannel];
   if (s) {
@@ -223,6 +306,15 @@ for (const b of modeButtons) {
 }
 
 rodEl.addEventListener("change", () => update({ rod: rodEl.value }));
+
+$("askFeatured").addEventListener("click", async () => {
+  if (!currentChannel) return;
+  const btn = $("askFeatured");
+  btn.disabled = true;
+  const r = await browser.runtime.sendMessage({ type: "SEND_CHAT_COMMAND", channel: currentChannel, text: "$destaque" });
+  statusEl.textContent = r?.ok ? "$destaque enviado — a resposta aparece aqui." : `Falha ao enviar $destaque (${r?.reason || "?"}).`;
+  setTimeout(() => (btn.disabled = false), 5000);
+});
 
 const openOptions = () => {
   browser.runtime.openOptionsPage();
@@ -264,6 +356,7 @@ async function load() {
   renderTwishStatus();
   await refreshHeartbeatTarget();
   startTicking();
+  loadGame();
   await syncTwish(); // le o Twish assim que o popup abre
 }
 

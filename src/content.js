@@ -178,10 +178,13 @@ function currentChatText() {
   return input ? (input.innerText || input.textContent || "").trim() : "";
 }
 
+// Qualquer comando do jogo ("$...") enviado pelo jogador e repassado: o
+// $pescar reinicia o contador; outros (ex: $aceitar, entrar em torneio)
+// podem zerar o CD da pesca, entao o background confere a conta.
 function reportIfFishCommand() {
   const text = currentChatText();
-  if (text === AT.FISH_COMMAND) {
-    browser.runtime.sendMessage({ type: "USER_SENT_COMMAND", text }).catch(() => {});
+  if (/^\$\S+/.test(text)) {
+    browser.runtime.sendMessage({ type: "USER_SENT_COMMAND", text: text.slice(0, 40) }).catch(() => {});
   }
 }
 
@@ -215,3 +218,80 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Leitura do chat: so mensagens do TwishGameBot.
+//   - "Peixe em destaque: matrinxã. Pescou um? ..."            -> peixe em destaque
+//   - "@fulano desafiou @voce pra um duelo! @voce tem 5m0s ..." -> convite de duelo
+//   - "@a venceu o duelo [por W.O.] contra @b ..."              -> fim de duelo
+// Observa so a lista de mensagens do chat (sem subarvore), entao o custo e
+// uma checagem curta por mensagem nova.
+// ---------------------------------------------------------------------------
+const CHAT_CONTAINER_SELECTORS = [
+  '[data-test-selector="chat-scrollable-area__message-container"]',
+  ".chat-scrollable-area__message-container"
+];
+const FEATURED_RE = /Peixe em destaque:\s*([^.!?\n]+)/i;
+const DUEL_END_RE = /@(\w+)\s+venceu o duelo\b.*?contra\s+@(\w+)/i;
+const DUEL_INVITE_RE = /@(\w+)\s+desafiou\s+@(\w+)\s+pra um duelo!.*?tem\s+(?:(\d+)m)?\s*(?:(\d+)s)?\s*pra usar\s+\$aceitar/i;
+
+function chatLineAuthor(node) {
+  const el = node.querySelector && (node.querySelector("[data-a-user]") || node.querySelector(".chat-author__display-name"));
+  if (!el) return "";
+  return (el.getAttribute("data-a-user") || el.textContent || "").trim().toLowerCase();
+}
+
+function chatLineText(node) {
+  const body = node.querySelector && node.querySelector('[data-a-target="chat-line-message-body"]');
+  return ((body || node).innerText || (body || node).textContent || "").trim();
+}
+
+function handleChatLine(node) {
+  if (!(node instanceof Element)) return;
+  if (chatLineAuthor(node) !== AT.GAME_BOT) return;
+  const text = chatLineText(node);
+
+  const featured = FEATURED_RE.exec(text);
+  if (featured) {
+    browser.runtime.sendMessage({ type: "CHAT_FEATURED_FISH", fish: featured[1].trim() }).catch(() => {});
+    return;
+  }
+
+  const ended = DUEL_END_RE.exec(text);
+  if (ended) {
+    browser.runtime.sendMessage({ type: "CHAT_DUEL_END", winner: ended[1], loser: ended[2] }).catch(() => {});
+    return;
+  }
+
+  const duel = DUEL_INVITE_RE.exec(text);
+  if (duel) {
+    const windowSeconds = (parseInt(duel[3] || "0", 10) * 60) + parseInt(duel[4] || "0", 10);
+    browser.runtime
+      .sendMessage({ type: "CHAT_DUEL_INVITE", challenger: duel[1], target: duel[2], windowSeconds })
+      .catch(() => {});
+  }
+}
+
+let chatObserver = null;
+let observedContainer = null;
+
+function attachChatObserver() {
+  let container = null;
+  for (const sel of CHAT_CONTAINER_SELECTORS) {
+    container = document.querySelector(sel);
+    if (container) break;
+  }
+  if (container === observedContainer && container && container.isConnected) return;
+  if (chatObserver) chatObserver.disconnect();
+  observedContainer = container;
+  if (!container) return;
+  chatObserver = new MutationObserver((mutations) => {
+    for (const m of mutations) for (const n of m.addedNodes) handleChatLine(n);
+  });
+  chatObserver.observe(container, { childList: true });
+}
+
+// A Twitch troca o chat ao navegar entre canais; confere a cada 5s se o
+// container observado ainda e o atual (barato).
+attachChatObserver();
+setInterval(attachChatObserver, 5000);

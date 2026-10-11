@@ -158,6 +158,17 @@
         </span>
       </label>
     </div>
+
+    <div class="setting">
+      <div class="setting-title">Notificações</div>
+      <label class="check-row">
+        <input type="checkbox" id="notifyDuel" />
+        <span>Avisar quando alguém me desafiar para um duelo
+          <span class="hint" style="display:block">Lido no chat da Twitch (a aba do canal precisa estar aberta). Só reconhece convites para você depois que a extensão ler sua conta no Twish uma vez — <span id="loginInfo"></span>.</span>
+        </span>
+      </label>
+      <div class="hint">Os avisos de eventos (XP em Dobro, Maré Turbo etc.) se ligam em cada canal, abaixo.</div>
+    </div>
   </section>
 
   <h2>Canais</h2>
@@ -191,6 +202,11 @@
         <select class="js-rod"></select>
       </div>
     </div>
+
+    <label class="check-row">
+      <input type="checkbox" class="js-notify-events" />
+      <span>Notificar quando começar um evento neste canal</span>
+    </label>
 
     <div class="setting" style="margin-top:14px">
       <label class="check-row" style="margin-top:0">

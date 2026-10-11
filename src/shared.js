@@ -52,6 +52,8 @@ AT.followsTwish = (mode) => mode === "auto" || mode === "semi";
 // Configuracoes gerais (valem pra extensao toda).
 AT.DEFAULT_GENERAL_SETTINGS = {
   defaultMaxJitterSeconds: 10, // atraso aleatorio maximo padrao (canais sem excecao usam este)
+  twishLogin: null, // login do jogador no Twish (lido da API; usado pra reconhecer convites de duelo)
+  notifyDuelInvites: false, // notificacao quando alguem te desafia pra um duelo
   semiAuto: {
     focusTab: true, // ao digitar, traz a aba (e a janela) da Twitch pra frente
     notify: true // mostra notificacao do sistema
@@ -75,6 +77,7 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   maxJitterSeconds: null, // null = usa o padrao geral; numero = excecao deste canal
   mode: "manual", // "manual" | "auto" | "semi"
   awaitingUser: false, // semi-automatico: comando digitado, esperando o jogador enviar
+  notifyEvents: false, // notificacao quando comeca um evento neste canal
   twishAvailableAt: null, // ultimo horario real de disponibilidade lido do Twish
   twishLastSeen: null, // quando essa leitura foi feita (gravado no maximo 1x/min durante o mesmo cooldown)
   lastSentAt: null, // ultimo envio local bem-sucedido
@@ -94,6 +97,13 @@ AT.effectiveJitterSeconds = function (channelSettings, general) {
   if (own !== null && own !== undefined) return AT.clampJitterSeconds(own);
   return AT.clampJitterSeconds((general || AT.DEFAULT_GENERAL_SETTINGS).defaultMaxJitterSeconds);
 };
+
+// Outras chaves do armazenamento (fora das configuracoes):
+//   gameState: { <canal>: { events: {event, grande_evento, fetchedAt}, featured: {fish, seenAt}, duelInvite: {from, expiresAt} } }
+AT.EVENTS_ALARM_NAME = "auto-twish-events";
+AT.GAME_BOT = "twishgamebot";
+AT.DUEL_COOLDOWN_MS = 30 * 60 * 1000; // cooldown de duelo depois que um duelo termina
+// gameState[canal] tambem guarda duelCooldownUntil (fim do cooldown de duelo).
 
 // "mm:ss" (sem milissegundos).
 AT.formatRemaining = function (ms) {
