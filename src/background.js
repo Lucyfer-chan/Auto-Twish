@@ -293,7 +293,7 @@ async function updateHeartbeat() {
   if (anyEnabled && !existing) {
     await browser.alarms.create(HEARTBEAT_NAME, { periodInMinutes: 1 });
     console.log(`${AT.LOG_PREFIX} Heartbeat ligado (rede de seguranca, a cada 1 min).`);
-  } else if (!anyEnabled && existing) {
+  } else if (!anyEnabled && existing && !safetyLocked) {
     await browser.alarms.clear(HEARTBEAT_NAME);
     console.log(`${AT.LOG_PREFIX} Heartbeat desligado (nenhum canal ativado).`);
   }
@@ -377,17 +377,36 @@ function isValidMe(j) {
   return j && typeof j === "object" && typeof j.cooldown_remaining === "number";
 }
 
-async function fetchTwishMe(channel) {
-  const url = `https://twish.com.br/api/${encodeURIComponent(channel)}/me`;
+// Chamada generica a API do Twish com o login do jogador. Tenta direto
+// daqui; se o site responder 401/403 (cookies nao enviados), repete a mesma
+// chamada de dentro de uma aba aberta do twish.com.br.
+// Devolve { ok, status, data, via } (ok=false com status 0 se nao deu).
+// Pra POST so repete pela aba quando a primeira resposta foi 401/403 (o
+// pedido nao foi aceito), nunca depois de erro de rede (evita compra dupla).
+async function twishApi(path, { method = "GET", body } = {}) {
+  const url = `https://twish.com.br${path}`;
+  const init = {
+    method,
+    credentials: "include",
+    cache: "no-store",
+    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined
+  };
 
+  let direct = null;
   try {
-    const r = await fetch(url, { credentials: "include", cache: "no-store" });
-    if (r.ok) {
-      const j = await r.json();
-      if (isValidMe(j)) return { data: j, via: "conta" };
+    const r = await fetch(url, init);
+    const text = await r.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch (e) {
+      data = null;
     }
+    direct = { ok: r.ok, status: r.status, data, via: "conta" };
+    if (r.ok || (r.status !== 401 && r.status !== 403)) return direct;
   } catch (e) {
-    // sem rede / bloqueado: tenta pela aba
+    if (method !== "GET") return { ok: false, status: 0, data: null, via: "erro de rede" };
   }
 
   try {
@@ -397,14 +416,21 @@ async function fetchTwishMe(channel) {
       try {
         const results = await browser.scripting.executeScript({
           target: { tabId: tab.id },
-          func: (u) =>
-            fetch(u, { credentials: "include", cache: "no-store" })
-              .then((r) => (r.ok ? r.json() : null))
+          func: (u, i) =>
+            fetch(u, i)
+              .then(async (r) => {
+                const t = await r.text();
+                let d = null;
+                try {
+                  d = t ? JSON.parse(t) : null;
+                } catch (e) {}
+                return { ok: r.ok, status: r.status, data: d };
+              })
               .catch(() => null),
-          args: [url]
+          args: [url, init]
         });
-        const j = results?.[0]?.result;
-        if (isValidMe(j)) return { data: j, via: "conta (pela aba)" };
+        const res = results?.[0]?.result;
+        if (res && (res.ok || (res.status !== 401 && res.status !== 403))) return { ...res, via: "conta (pela aba)" };
       } catch (e) {
         // aba sem permissao/fechando: tenta a proxima
       }
@@ -412,7 +438,12 @@ async function fetchTwishMe(channel) {
   } catch (e) {
     // ignora
   }
-  return null;
+  return direct || { ok: false, status: 0, data: null, via: null };
+}
+
+async function fetchTwishMe(channel) {
+  const r = await twishApi(`/api/${encodeURIComponent(channel)}/me`);
+  return r.ok && isValidMe(r.data) ? { data: r.data, via: r.via } : null;
 }
 
 // Converte a resposta de /me no formato usado aqui.
@@ -584,6 +615,7 @@ async function syncAllTwishTabs() {
 // NAO confirma que o TwishGameBot de fato respondeu — so que o envio
 // local (Twitch) funcionou.
 async function attemptSend(channel, text = FIXED_MESSAGE) {
+  if (safetyLocked) return { ok: false, reason: "verificacao-pendente" };
   const tabs = await browser.tabs.query({ url: "*://*.twitch.tv/*" });
   const targets = tabs.filter((t) => extractChannelFromUrl(t.url) === channel);
 
@@ -1008,6 +1040,12 @@ async function processChannelIfDue(channel, source) {
     if (settings.awaitingUser) return; // semi: ja digitado, esperando o jogador
     if (settings.nextFireAt && Date.now() < settings.nextFireAt) return; // ainda nao esta na hora
 
+    // Trava de seguranca: confere a verificacao antes de qualquer envio.
+    if (await checkChallenge(source)) {
+      console.warn(`${AT.LOG_PREFIX} (${source}) "${channel}": verificacao pendente, envio pausado.`);
+      return; // o heartbeat tenta de novo quando a trava sair
+    }
+
     // Auto/semi: confere o cooldown real pela conta antes de agir, pra
     // nunca mandar o comando durante o cooldown.
     if (AT.followsTwish(settings.mode)) {
@@ -1045,6 +1083,82 @@ async function processChannelIfDue(channel, source) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Trava de seguranca (verificacao anti-bot do Twish)
+//
+// GET /api/me/challenge responde { state: "pending", seconds_left } quando o
+// jogo pede a verificacao em twish.com.br/verificacao. Enquanto estiver
+// pendente, nenhum comando e enviado e o Mercado para. Retoma sozinho quando
+// deixar de estar pendente (conferido 1x por minuto pelo heartbeat).
+// A extensao so LE esse estado; nunca responde a verificacao.
+// ---------------------------------------------------------------------------
+let safetyLocked = false; // espelho em memoria de gameState.__safety
+
+async function readSafetyLock() {
+  const { safety } = await browser.storage.local.get("safety");
+  safetyLocked = !!(safety && safety.locked);
+  return safety || { locked: false };
+}
+
+async function checkChallenge(source) {
+  const r = await twishApi("/api/me/challenge");
+  if (!r.ok || !r.data) return safetyLocked; // sem login/sem resposta: mantem como esta
+  const pending = r.data.state === "pending";
+  const { safety } = await browser.storage.local.get("safety");
+  const wasLocked = !!(safety && safety.locked);
+
+  if (pending && !wasLocked) {
+    await browser.storage.local.set({ safety: { locked: true, since: Date.now(), secondsLeft: Number(r.data.seconds_left) || null } });
+    safetyLocked = true;
+    console.warn(`${AT.LOG_PREFIX} (${source}) Verificacao anti-bot pendente: envios e Mercado pausados.`);
+    try {
+      await browser.notifications.create("safety", {
+        type: "basic",
+        title: "Auto Twish — verificação pedida",
+        message: `O Twish pediu a verificação. Envios pausados até você resolver em twish.com.br/verificacao${r.data.seconds_left ? ` (${AT.formatRemaining(r.data.seconds_left * 1000)} restantes)` : ""}.`
+      });
+    } catch (e) {}
+    await ensureHeartbeatForSafety();
+  } else if (!pending && wasLocked) {
+    await browser.storage.local.set({ safety: { locked: false, releasedAt: Date.now() } });
+    safetyLocked = false;
+    console.log(`${AT.LOG_PREFIX} (${source}) Verificacao resolvida: retomando.`);
+    try {
+      browser.notifications.clear("safety");
+      await browser.notifications.create("safety-ok", {
+        type: "basic",
+        title: "Auto Twish — retomando",
+        message: "A verificação não está mais pendente. Os envios voltaram."
+      });
+    } catch (e) {}
+    await rescheduleAfterSafety();
+  }
+  return pending;
+}
+
+// Durante a trava o heartbeat precisa existir pra conferir de novo.
+async function ensureHeartbeatForSafety() {
+  const existing = await browser.alarms.get(HEARTBEAT_NAME);
+  if (!existing) await browser.alarms.create(HEARTBEAT_NAME, { periodInMinutes: 1 });
+}
+
+// Ao sair da trava, quem estava atrasado volta com um atraso aleatorio (nao
+// todos no mesmo segundo).
+async function rescheduleAfterSafety() {
+  const changed = await mutateChannels((channels) => {
+    const out = [];
+    for (const [name, s] of Object.entries(channels)) {
+      if (!s || !s.enabled || s.awaitingUser) continue;
+      if (!s.nextFireAt || s.nextFireAt < Date.now()) {
+        s.nextFireAt = Date.now() + 3000 + computeJitterMs(s);
+        out.push([name, s.nextFireAt]);
+      }
+    }
+    return out;
+  });
+  for (const [name, when] of changed) await scheduleDueAlarm(name, when);
+}
+
 // Reagenda o canal pro horario real informado pelo Twish (+ atraso).
 async function rescheduleTo(channel, availableAt) {
   const next = await mutateChannels((channels) => {
@@ -1075,6 +1189,10 @@ async function postSendCheck(channel) {
 // Rede de seguranca: varre todos os canais ativos a cada 1 min. So deve
 // realmente disparar algo se o alarme dedicado correspondente tiver falhado.
 async function heartbeatTick() {
+  // Com a trava ligada, so confere se ja pode sair dela.
+  await readSafetyLock();
+  if (safetyLocked && (await checkChallenge("heartbeat"))) return;
+
   // Rele os titulos das abas do Twish (barato: so uma consulta de abas).
   // Assim o modo automatico se corrige sozinho mesmo quando o titulo nao
   // muda — ex: TwishGameBot nao respondeu e a aba continua em "Twish".
@@ -1117,6 +1235,7 @@ async function restoreCooldownMultipliers() {
 }
 
 async function bootstrap() {
+  await readSafetyLock();
   await restoreCooldownMultipliers();
   await clearLegacyAlarms();
   await updateHeartbeat();
@@ -1207,6 +1326,16 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // Vem do content.js: mensagens do TwishGameBot lidas no chat.
+  // Bot falou de verificacao marcando o jogador: confere a trava na hora.
+  if (msg?.type === "CHAT_VERIFICATION_HINT") {
+    (async () => {
+      const general = await getGeneralSettings();
+      const mentions = Array.isArray(msg.mentions) ? msg.mentions.map((m) => String(m).toLowerCase()) : [];
+      if (general.twishLogin && mentions.includes(general.twishLogin)) await checkChallenge("chat");
+    })();
+    return false;
+  }
+
   if (msg?.type === "CHAT_FEATURED_FISH" || msg?.type === "CHAT_DUEL_INVITE" || msg?.type === "CHAT_DUEL_END") {
     const channel = extractChannelFromUrl(sender?.tab?.url || "");
     if (!channel) return false;
@@ -1216,6 +1345,12 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       onDuelInvite(channel, String(msg.challenger), String(msg.target), Math.max(1, Number(msg.windowSeconds) || 300));
     }
     return false;
+  }
+
+  // Popup/configuracoes: estado da trava de seguranca.
+  if (msg?.type === "GET_SAFETY") {
+    readSafetyLock().then((s) => sendResponse({ safety: s }));
+    return true;
   }
 
   // Popup: estado do jogo do canal (atualiza os eventos na hora).

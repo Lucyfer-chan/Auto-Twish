@@ -279,7 +279,15 @@ async function update(patch) {
 
 // O popup e avisado quando algo muda (envio feito, reagendamento...), em
 // vez de perguntar ao background a cada segundo.
+async function renderSafety() {
+  try {
+    const { safety } = await browser.runtime.sendMessage({ type: "GET_SAFETY" });
+    $("safetyLine").hidden = !(safety && safety.locked);
+  } catch (e) {}
+}
+
 browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.safety) renderSafety();
   if (area === "local" && changes.gameState && currentChannel) {
     gameState = (changes.gameState.newValue || {})[currentChannel] || {};
     renderGame();
@@ -360,4 +368,5 @@ async function load() {
   await syncTwish(); // le o Twish assim que o popup abre
 }
 
+renderSafety();
 load();

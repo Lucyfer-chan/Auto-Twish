@@ -256,6 +256,13 @@ function handleChatLine(node) {
   if (chatLineAuthor(node) !== AT.GAME_BOT) return;
   const text = chatLineText(node);
 
+  // Verificacao anti-bot: o texto exato ainda nao e conhecido, entao qualquer
+  // mensagem do bot que fale de verificacao faz o background conferir a API.
+  if (/verifica[cç][aã]o|verificar|twish\.com\.br\/verificacao/i.test(text)) {
+    const mentions = [...text.matchAll(/@(\w+)/g)].map((m) => m[1]);
+    browser.runtime.sendMessage({ type: "CHAT_VERIFICATION_HINT", mentions }).catch(() => {});
+  }
+
   const featured = FEATURED_RE.exec(text);
   if (featured) {
     browser.runtime.sendMessage({ type: "CHAT_FEATURED_FISH", fish: featured[1].trim() }).catch(() => {});

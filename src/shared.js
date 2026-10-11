@@ -57,6 +57,13 @@ AT.DEFAULT_GENERAL_SETTINGS = {
   semiAuto: {
     focusTab: true, // ao digitar, traz a aba (e a janela) da Twitch pra frente
     notify: true // mostra notificacao do sistema
+  },
+  // Mercado — Aquisicao automatica (Road Map item 6). Desativada por padrao.
+  market: {
+    enabled: false,
+    intervalSeconds: 30, // escolhido pelo jogador; cada ciclo varia +-25%
+    boat: null, // canal usado nas compras (null = primeiro canal configurado)
+    notifyPurchases: false
   }
 };
 
@@ -66,7 +73,8 @@ AT.mergeGeneral = function (saved) {
   return {
     ...AT.DEFAULT_GENERAL_SETTINGS,
     ...g,
-    semiAuto: { ...AT.DEFAULT_GENERAL_SETTINGS.semiAuto, ...(g.semiAuto || {}) }
+    semiAuto: { ...AT.DEFAULT_GENERAL_SETTINGS.semiAuto, ...(g.semiAuto || {}) },
+    market: { ...AT.DEFAULT_GENERAL_SETTINGS.market, ...(g.market || {}) }
   };
 };
 
@@ -104,6 +112,48 @@ AT.EVENTS_ALARM_NAME = "auto-twish-events";
 AT.GAME_BOT = "twishgamebot";
 AT.DUEL_COOLDOWN_MS = 30 * 60 * 1000; // cooldown de duelo depois que um duelo termina
 // gameState[canal] tambem guarda duelCooldownUntil (fim do cooldown de duelo).
+
+// ---------------------------------------------------------------------------
+// Mercado
+// Outras chaves do armazenamento: acquisitionList (lista de aquisicao) e
+// marketState (status: ciclos, ultima mensagem, compras recentes).
+// ---------------------------------------------------------------------------
+AT.MARKET_ALARM_NAME = "auto-twish-market";
+AT.MARKET_MIN_INTERVAL = 5;
+AT.MARKET_MAX_INTERVAL = 600;
+AT.MARKET_FULL_PCT = 95; // a partir daqui vale o "valor maximo"
+
+AT.clampMarketInterval = function (v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return AT.DEFAULT_GENERAL_SETTINGS.market.intervalSeconds;
+  return Math.min(AT.MARKET_MAX_INTERVAL, Math.max(AT.MARKET_MIN_INTERVAL, Math.round(n)));
+};
+
+// "% em relacao ao peso maximo", do mesmo jeito que o site calcula.
+AT.marketPct = function (weight, maxKg) {
+  return maxKg > 0 ? Math.floor((weight / maxKg) * 1000) / 10 : 0;
+};
+
+// Item da lista de aquisicao:
+//   { id, fishId, fishName, minKg, minPct, maxPrice, maxPriceBelow95, enabled }
+AT.isValidAcquisition = function (e) {
+  return (
+    e &&
+    typeof e.fishId === "string" &&
+    e.fishId &&
+    [e.minKg, e.minPct, e.maxPrice, e.maxPriceBelow95].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)
+  );
+};
+
+// Regra da extensao antiga (Mercado de Peixes):
+//   1) peso >= peso minimo E preco <= valor maximo, senao nao compra;
+//   2) com % >= 95, compra;
+//   3) abaixo de 95%, so compra com preco <= "valor maximo abaixo de 95%" E % >= % minima.
+AT.shouldBuy = function (e, { weight, pct, price }) {
+  if (!(weight >= e.minKg && price <= e.maxPrice)) return false;
+  if (pct >= AT.MARKET_FULL_PCT) return true;
+  return price <= e.maxPriceBelow95 && pct >= e.minPct;
+};
 
 // "mm:ss" (sem milissegundos).
 AT.formatRemaining = function (ms) {

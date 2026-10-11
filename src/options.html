@@ -117,6 +117,79 @@
     color: var(--text-muted);
     line-height: 1.5;
   }
+  /* Trava de seguranca */
+  .safety {
+    border-color: var(--warn);
+    margin-bottom: 8px;
+  }
+  .safety strong {
+    color: var(--warn);
+  }
+
+  /* Mercado */
+  .market-row-head,
+  .acq-row {
+    display: grid;
+    grid-template-columns: minmax(130px, 2fr) repeat(4, minmax(64px, 1fr)) 44px 32px;
+    gap: 6px;
+    align-items: center;
+  }
+  .market-row-head {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin: 14px 0 4px;
+  }
+  .acq-row + .acq-row {
+    margin-top: 6px;
+  }
+  .acq-row input[type="text"],
+  .acq-row input[type="number"],
+  .num-input {
+    width: 100%;
+    background: var(--bg-sunken);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 6px;
+    font-size: 12px;
+  }
+  .acq-row input.invalid {
+    border-color: var(--danger);
+  }
+  .acq-row .center {
+    text-align: center;
+  }
+  .num-input {
+    width: 90px;
+  }
+  .market-status {
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+  .market-status strong {
+    color: var(--text);
+  }
+  .purchases {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    font-size: 12px;
+  }
+  @media (max-width: 760px) {
+    .market-row-head {
+      display: none;
+    }
+    .acq-row {
+      grid-template-columns: 1fr 1fr;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .acq-row .fish {
+      grid-column: 1 / -1;
+    }
+  }
   @media (max-width: 560px) {
     .channel-grid {
       grid-template-columns: 1fr;
@@ -130,6 +203,13 @@
     <h1>Auto Twish</h1>
     <span id="version" class="version"></span>
   </div>
+
+  <section id="safetyBanner" class="panel safety" hidden>
+    <strong>🤖 Verificação pendente no Twish.</strong>
+    Todos os envios e o Mercado estão pausados. Resolva em
+    <a href="https://twish.com.br/verificacao" target="_blank" rel="noopener">twish.com.br/verificacao</a>
+    — a extensão confere de 1 em 1 minuto e retoma sozinha.
+  </section>
 
   <h2>Configurações gerais</h2>
   <section class="panel">
@@ -173,6 +253,47 @@
 
   <h2>Canais</h2>
   <div id="channels"></div>
+
+  <h2>Mercado — aquisição automática</h2>
+  <section class="panel">
+    <label class="row-between">
+      <span class="setting-title">Comprar automaticamente os peixes da lista</span>
+      <input type="checkbox" id="marketEnabled" class="switch" />
+    </label>
+    <div class="hint">Consulta os anúncios do Mercado pela API do site (com o seu login no twish.com.br) e compra no máximo um anúncio por verificação, o mais barato que passar nos critérios. Desliga sozinho com saldo insuficiente.</div>
+
+    <div class="channel-grid" style="margin-top:6px">
+      <div>
+        <label class="field-label" for="marketBoat">Barco usado nas compras</label>
+        <select id="marketBoat"></select>
+      </div>
+      <div>
+        <label class="field-label" for="marketInterval">Intervalo entre verificações (segundos)</label>
+        <input type="number" id="marketInterval" class="num-input" min="5" max="600" step="1" />
+        <div class="hint">Cada verificação varia ±25%. Mais rápido pega mais ofertas, mas é um ritmo mais fácil de notar.</div>
+      </div>
+    </div>
+
+    <label class="check-row">
+      <input type="checkbox" id="marketNotify" />
+      <span>Notificar cada compra</span>
+    </label>
+
+    <div class="market-row-head">
+      <span>Peixe</span><span>Peso mín. (kg)</span><span>% mín.</span><span>Valor máx.</span><span>Máx. abaixo de 95%</span><span class="center">Ativo</span><span></span>
+    </div>
+    <div id="acqList"></div>
+    <datalist id="fishOptions"></datalist>
+    <div class="hint">Regra: o peixe precisa ter pelo menos o peso mínimo e custar até o valor máximo. Com 95% ou mais do peso máximo da espécie, compra. Abaixo de 95%, só compra se custar até o "máx. abaixo de 95%" e tiver pelo menos a % mínima.</div>
+
+    <div class="channel-actions">
+      <button type="button" id="acqAdd" class="btn secondary">Adicionar peixe</button>
+      <button type="button" id="marketRun" class="btn secondary">Verificar agora</button>
+      <span id="marketRunStatus" class="action-status"></span>
+    </div>
+
+    <div id="marketStatus" class="market-status"></div>
+  </section>
 </main>
 
 <template id="channelTemplate">
@@ -231,5 +352,6 @@
 <script src="browser-polyfill.js"></script>
 <script src="shared.js"></script>
 <script src="options.js"></script>
+<script src="options-market.js"></script>
 </body>
 </html>

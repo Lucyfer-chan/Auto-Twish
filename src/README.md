@@ -1,4 +1,4 @@
-# Auto Twish — v 0.3.3
+# Auto Twish — v 0.3.4
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -112,11 +112,40 @@ O popup tem uma área "Jogo" com:
 A leitura do chat só olha mensagens do TwishGameBot e precisa da aba do
 canal na Twitch aberta.
 
+## Trava de segurança (verificação do Twish)
+
+O Twish às vezes pede uma verificação anti-bot em twish.com.br/verificacao.
+Antes de cada envio, a extensão consulta a API do site para saber se há uma
+verificação pendente (e confere na hora se o TwishGameBot falar de
+verificação marcando você). Enquanto estiver pendente, nenhum comando é
+enviado e o Mercado para; o popup e as configurações mostram um aviso e chega
+uma notificação. A extensão confere de 1 em 1 minuto e retoma sozinha quando
+a verificação sai. Ela só lê esse estado — nunca responde a verificação.
+
+## Mercado — aquisição automática
+
+Na página de configurações, seção "Mercado". Desligada por padrão.
+
+- Lista de aquisição: para cada peixe, peso mínimo (kg), % mínima do peso
+  máximo da espécie, valor máximo e valor máximo abaixo de 95%. Regra: o
+  peixe precisa ter o peso mínimo e custar até o valor máximo; com 95% ou
+  mais, compra; abaixo de 95%, só compra se custar até o "máx. abaixo de 95%"
+  e tiver a % mínima.
+- A cada verificação (intervalo escolhido, de 5 a 600 s, com variação de
+  ±25%), consulta os anúncios pela API do site e compra no máximo um: o mais
+  barato dentro dos critérios. Ignora os seus próprios anúncios.
+- Barco usado nas compras: escolhível (o mercado é compartilhado, mas a
+  compra passa pelo endereço de um canal).
+- Desliga sozinha com saldo insuficiente e pausa com a trava de segurança.
+- "Verificar agora" com a aquisição desligada só **simula**: mostra o que
+  compraria, sem comprar.
+- Precisa estar logado no twish.com.br neste Firefox.
+
 ## Instalação — Firefox (temporária, para testar)
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 0.3.3 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 0.3.4 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -184,6 +213,12 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 0.3.4** — Fase 4 (início): trava de segurança e Mercado.
+  - Trava de segurança: pausa envios e Mercado com verificação pendente
+    (`/api/me/challenge`), avisa e retoma sozinha.
+  - Mercado — aquisição automática (item 6) pela API do site, com a regra
+    da extensão antiga "Mercado de Peixes"; simulação pelo "Verificar agora".
+  - Arquivos novos: `market.js`, `options-market.js`.
 - **v 0.3.3** — ajustes da Fase 3.
   - Fim de duelo reconhecido em vitória, derrota ou empate (qualquer mensagem
     do TwishGameBot sobre duelo, com resultado, que te marque).
