@@ -171,14 +171,14 @@ async function scheduleKitCheck(channel, delayMs) {
 async function onKitEvents(channel, ev) {
   const { kit } = await kitConfigs(channel);
   const e = ev && ev.event;
-  const entry = e && AT.KIT_EVENTS.includes(e.kind) ? kit[e.kind] : null;
+  const pick = AT.kitEntryForEvent(kit, e); // Sorte Rara: a regra da raridade sorteada
   const st = await readKitState(channel);
-  if (entry && AT.kitIsActive(entry)) {
-    const key = `${e.kind}:${e.name}`;
+  if (pick) {
+    const key = `${e.kind}:${e.name}:${pick.tier || ""}`;
     const endsAt = (ev.fetchedAt || Date.now()) + Number(e.seconds_remaining) * 1000;
     const isNew = !st.ctx.event || st.ctx.event.key !== key;
     await saveKitState(channel, (k) => {
-      k.ctx.event = { key, kind: e.kind, baitId: entry.baitId, endsAt };
+      k.ctx.event = { key, kind: e.kind, tier: pick.tier, baitId: pick.entry.baitId, endsAt };
     });
     if (isNew) await scheduleKitCheck(channel, 2000 + Math.random() * 6000);
   } else if (st.ctx.event) {
@@ -237,7 +237,7 @@ async function runKitCheck(channel, source) {
     let next = Infinity;
     const evc = st.ctx.event;
     if (evc) {
-      const entry = kit[evc.kind];
+      const entry = AT.kitEntryOf(kit, evc.kind, evc.tier);
       const left = evc.endsAt - Date.now();
       if (entry && entry.enabled && left > KIT_MIN_EVENT_LEFT_MS) {
         if (entry.turbo && acc.boostRemaining <= 2) notes.push(await activateItem(channel, AT.TURBO_ITEM, "Turbo de Pesca", entry.turboBuy, acc));
@@ -253,7 +253,8 @@ async function runKitCheck(channel, source) {
     if (Number.isFinite(next)) await scheduleKitCheck(channel, Math.max(10000, next));
 
     if (notes.length) {
-      await kitLog(channel, `${evc ? AT.KIT_EVENT_LABELS[evc.kind] + ": " : ""}${notes.join(" · ")}`);
+      const label = evc ? AT.KIT_EVENT_LABELS[evc.kind] + (evc.tier ? ` (${AT.TIER_LABELS[evc.tier]})` : "") + ": " : "";
+      await kitLog(channel, `${label}${notes.join(" · ")}`);
       const acted = notes.filter((n) => /ativado|equipada|de volta|desequipada/.test(n));
       if (acted.length) await notifyAutomation(`kit-auto:${channel}`, `🎣 Eventos em ${channel}`, acted.join(" · "));
     }
@@ -313,7 +314,15 @@ async function checkTournament(channel, source) {
 
     // Entrar
     const joinLeft = (Number(t.join_window_seconds_remaining) || 0) * 1000;
-    if (!t.is_participant && t.join_window_open && tourney.join && joinLeft > 4000) {
+    if (!t.is_participant && t.join_window_open && tourney.join && joinLeft > 4000 && (await currentExpedition(channel, "torneio"))) {
+      // Em expedicao nao da para entrar em torneio (em nenhum canal).
+      if (st.tourneyKey !== key) {
+        await kitLog(channel, "Torneio aberto, mas não entrei: em expedição.");
+        await saveKitState(channel, (k) => {
+          k.tourneyKey = key;
+        });
+      }
+    } else if (!t.is_participant && t.join_window_open && tourney.join && joinLeft > 4000) {
       const acc = await readKitAccount(channel);
       const d = tourneyJoinDecision(tourney, acc, joinLeft, !!(s && s.enabled));
       if (d.waitMs) {

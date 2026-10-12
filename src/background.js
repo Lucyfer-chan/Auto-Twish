@@ -817,7 +817,8 @@ async function applyChannelSettings(channel, patch) {
     for (const [key, eff, merge] of [
       ["eventKit", AT.effectiveEventKit, (a, b) => mergeEventKit(a, b)],
       ["tournament", AT.effectiveTournament, (a, b) => AT.sanitizeTournament({ ...a, ...b })],
-      ["duelBait", AT.effectiveDuelBait, (a, b) => AT.sanitizeDuelBait({ ...a, ...b })]
+      ["duelBait", AT.effectiveDuelBait, (a, b) => AT.sanitizeDuelBait({ ...a, ...b })],
+      ["invDump", AT.effectiveInvDump, (a, b) => AT.sanitizeInvDump({ ...a, ...b })]
     ]) {
       if (key in patch) s[key] = patch[key] === null ? null : merge(eff(previous, stateCache && stateCache.general), patch[key]);
     }
@@ -872,6 +873,7 @@ async function applyChannelSettings(channel, patch) {
   await updateEventsPoller();
   if ("notifyEvents" in patch && settings.notifyEvents) refreshEvents(channel, false); // estado inicial, sem notificar o que ja estava rolando
   if ("turboSell" in patch) await reevaluateTurboSell(channel);
+  if ("invDump" in patch && typeof onInvDumpSettingsChanged === "function") onInvDumpSettingsChanged(channel);
   if ("protection" in patch) onProtectionSettingsChanged(channel);
   if ("shopList" in patch) await reevaluateShopping(channel);
   if (["eventKit", "tournament", "duelBait"].some((k) => k in patch) && typeof onKitSettingsChanged === "function") onKitSettingsChanged(channel);
@@ -906,7 +908,14 @@ async function reevaluateTurboSell(only) {
 function mergeEventKit(cur, patch) {
   const base = AT.sanitizeEventKit(cur);
   const out = {};
-  for (const k of AT.KIT_EVENTS) out[k] = { ...base[k], ...((patch && patch[k]) || {}) };
+  for (const k of AT.KIT_EVENTS) {
+    const p = (patch && patch[k]) || {};
+    if (k === AT.LUCK_KIND) {
+      const tiers = { ...base[k].tiers };
+      for (const t of AT.LUCK_TIERS) if (p.tiers && p.tiers[t]) tiers[t] = { ...tiers[t], ...p.tiers[t] };
+      out[k] = { ...base[k], ...p, tiers };
+    } else out[k] = { ...base[k], ...p };
+  }
   return AT.sanitizeEventKit(out);
 }
 
@@ -1238,6 +1247,12 @@ async function maybeAutoAcceptDuel(channel, challenger, expiresAt) {
   const delayMs = Math.min(room, 3000 + Math.random() * 7000);
   await sleep(delayMs);
 
+  // Em expedicao nao da para duelar (em nenhum canal).
+  if (await currentExpedition(channel, "duelo")) {
+    console.log(`${AT.LOG_PREFIX} Duelo de @${challenger} em "${channel}" NAO aceito: em expedicao.`);
+    return;
+  }
+
   // O convite ainda esta de pe? (o jogador pode ter aceitado/recusado na mao)
   const { gameState } = await browser.storage.local.get("gameState");
   const inv = ((gameState || {})[channel] || {}).duelInvite;
@@ -1399,6 +1414,14 @@ async function processChannelIfDue(channel, source) {
       return; // o heartbeat tenta de novo quando a trava sair
     }
 
+    // Trava da Expedicao: no mar, so pesca no canal por onde zarpou.
+    const exp = await expeditionBlocks(channel, source);
+    if (exp) {
+      const next = await postponeForExpedition(channel, exp);
+      console.log(`${AT.LOG_PREFIX} (${source}) "${channel}": em expedicao pelo canal "${exp.boat || "?"}"; $pescar pausado ate ${next ? new Date(next).toLocaleTimeString() : "-"}.`);
+      return;
+    }
+
     // Auto/semi: confere o cooldown real pela conta antes de agir, pra
     // nunca mandar o comando durante o cooldown.
     if (AT.followsTwish(settings.mode)) {
@@ -1422,6 +1445,7 @@ async function processChannelIfDue(channel, source) {
     const result = await attemptSend(channel);
     const nextFireAt = await recordSendResult(channel, result.ok);
     if (result.ok && AT.followsTwish(settings.mode)) schedulePostSendCheck(channel);
+    if (result.ok && typeof scheduleInvDump === "function") scheduleInvDump(channel);
 
     if (!result.ok) {
       console.warn(`${AT.LOG_PREFIX} (${source}) Falha ao enviar para "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
@@ -1520,6 +1544,157 @@ async function rescheduleTo(channel, availableAt) {
     s.twishAvailableAt = availableAt;
     s.twishLastSeen = Date.now();
     s.nextFireAt = Math.max(Date.now(), availableAt) + computeJitterMs(s);
+    return s.nextFireAt;
+  });
+  if (next) await scheduleDueAlarm(channel, next);
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Trava da Expedicao
+//
+// Durante uma expedicao (30 min no mar) o jogador so pode pescar no barco
+// (canal) por onde zarpou. GET /api/{canal}/expeditions devolve "mine" (id da
+// expedicao do jogador; o mesmo em qualquer canal) e as viagens no mar
+// ("voyages", state "at_sea", com seconds_to_end e a tripulacao; crew[].boat
+// e o canal por onde cada um zarpou). Sala aberta (lobby) ainda nao trava.
+// No mar, o $pescar fica pausado em todos os outros canais e volta sozinho
+// quando a viagem termina; aceitar duelo e entrar em torneio ficam
+// bloqueados em TODOS os canais. A extensao so LE esse estado.
+// Reserva sem API: a mensagem do bot "⛵ Zarpou à <mar>: @a, @b! Por 30 min
+// o $pescar de vocês pesca no mar." (content.js) liga a trava na hora, com o
+// canal da mensagem como canal da expedicao, ate o fim dos minutos citados.
+// ---------------------------------------------------------------------------
+const EXPEDITION_MAX_AGE_MS = 20 * 1000; // fora do mar: antes de pescar, confere se o estado tiver mais que isso
+const EXPEDITION_AT_SEA_RECHECK_MS = 5 * 60 * 1000; // no mar: confere de novo a cada 5 min
+const EXPEDITION_OVERTIME_MS = 30 * 1000; // passou do fim e ainda consta no mar: confere de novo em 30 s
+const EXPEDITION_CHAT_GRACE_MS = 3 * 60 * 1000; // a API pode demorar a mostrar a viagem que o chat anunciou
+let expeditionState = null; // { atSea, id, sea, kind, boat, endsAt, checkedAt }
+
+async function readExpeditionState() {
+  if (expeditionState) return expeditionState;
+  const { expedition } = await browser.storage.local.get("expedition");
+  expeditionState = expedition || null;
+  return expeditionState;
+}
+
+function expeditionIsFresh(st) {
+  if (!st || !st.checkedAt) return false;
+  const age = Date.now() - st.checkedAt;
+  if (st.atSea) return Date.now() < st.endsAt && age < EXPEDITION_AT_SEA_RECHECK_MS;
+  return age < EXPEDITION_MAX_AGE_MS;
+}
+
+// Le a expedicao do jogador pela conta. Devolve o estado novo, ou null se a
+// API nao respondeu (sem login etc.).
+async function refreshExpedition(channel, source) {
+  const base = `/api/${encodeURIComponent(channel)}/expeditions`;
+  const r = await twishApi(base);
+  if (!r.ok || !r.data || typeof r.data !== "object" || !Array.isArray(r.data.voyages)) return null;
+  const mineId = r.data.mine || null;
+  let trip = mineId ? r.data.voyages.find((v) => v && v.id === mineId) : null;
+  if (mineId && !trip) {
+    const d = await twishApi(`${base}/${encodeURIComponent(mineId)}`);
+    if (d.ok && d.data && d.data.id === mineId) trip = d.data;
+  }
+
+  let st = { atSea: false, checkedAt: Date.now() };
+  if (trip && trip.state === "at_sea") {
+    let login = (await getGeneralSettings()).twishLogin || null;
+    if (!login) {
+      const me = await fetchTwishMe(channel);
+      if (me && me.data.login) {
+        login = String(me.data.login).toLowerCase();
+        await rememberTwishLogin(login);
+      }
+    }
+    const crew = Array.isArray(trip.crew) ? trip.crew : [];
+    const mine = crew.find((c) => c && login && String(c.handle || "").toLowerCase() === login) || (crew.length === 1 ? crew[0] : null);
+    const secs = Number(trip.seconds_to_end);
+    st = {
+      atSea: true,
+      id: trip.id,
+      sea: trip.sea || null,
+      kind: trip.kind || null,
+      boat: mine && mine.boat ? String(mine.boat).toLowerCase() : null,
+      endsAt: Date.now() + (Number.isFinite(secs) && secs > 0 ? secs * 1000 : EXPEDITION_OVERTIME_MS),
+      checkedAt: Date.now()
+    };
+  }
+
+  const prev = await readExpeditionState();
+  const wasAtSea = !!(prev && prev.atSea);
+  if (!st.atSea && wasAtSea && prev.source === "chat" && Date.now() - (prev.chatAt || 0) < EXPEDITION_CHAT_GRACE_MS && Date.now() < prev.endsAt) {
+    return prev; // o chat acabou de anunciar a partida: espera a API alcancar
+  }
+  if (st.atSea) st.source = "api";
+  if (st.atSea && (!wasAtSea || prev.id !== st.id)) {
+    console.log(`${AT.LOG_PREFIX} (${source}) Expedicao no mar (${st.sea || "?"}, pelo canal "${st.boat || "?"}"): $pescar pausado nos outros canais ate ${new Date(st.endsAt).toLocaleTimeString()}.`);
+  } else if (!st.atSea && wasAtSea) {
+    console.log(`${AT.LOG_PREFIX} (${source}) Expedicao terminou: $pescar liberado em todos os canais.`);
+  }
+  expeditionState = st;
+  await browser.storage.local.set({ expedition: st });
+  if (!st.atSea && wasAtSea) await rescheduleAfterSafety(); // quem ficou parado volta (com atraso aleatorio)
+  return st;
+}
+
+// O jogador esta no mar? Devolve o estado da expedicao ou null.
+async function currentExpedition(channel, source) {
+  let st = await readExpeditionState();
+  let fresh = expeditionIsFresh(st);
+  if (!fresh) {
+    const n = await refreshExpedition(channel, source);
+    if (n) {
+      st = n;
+      fresh = true;
+    }
+  }
+  if (!st || !st.atSea) return null;
+  if (!fresh && Date.now() >= st.endsAt) return null; // sem como conferir: nao trava alem do fim previsto
+  return st;
+}
+
+// O $pescar neste canal esta travado pela expedicao? Devolve o estado da
+// expedicao (trava) ou null (pode pescar).
+async function expeditionBlocks(channel, source) {
+  const st = await currentExpedition(channel, source);
+  if (!st) return null;
+  if (st.boat && st.boat === channel) return null; // canal por onde zarpou: pesca normal
+  return st;
+}
+
+// content.js: o bot anunciou a partida de uma expedicao neste canal.
+async function onExpeditionDepartedChat(channel, seaName, mentions, minutes) {
+  const login = (await getGeneralSettings()).twishLogin || null;
+  if (!login || !mentions.includes(login)) return;
+  const norm = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const sea = Object.keys(AT.EXPEDITION_SEAS).find((id) => norm(AT.EXPEDITION_SEAS[id]) === norm(seaName)) || null;
+  const prev = await readExpeditionState();
+  if (prev && prev.atSea && prev.source === "api" && Date.now() < prev.endsAt) return; // a API ja sabe (e e mais precisa)
+  const st = {
+    atSea: true,
+    id: null,
+    sea,
+    seaName: sea ? null : String(seaName || "").slice(0, 40) || null,
+    kind: null,
+    boat: channel,
+    endsAt: Date.now() + Math.min(Math.max(Number(minutes) || 30, 1), 120) * 60000,
+    checkedAt: Date.now(),
+    chatAt: Date.now(),
+    source: "chat"
+  };
+  expeditionState = st;
+  await browser.storage.local.set({ expedition: st });
+  console.log(`${AT.LOG_PREFIX} (chat) Expedicao anunciada em "${channel}" (${seaName}): $pescar pausado nos outros canais, duelo e torneio bloqueados ate ${new Date(st.endsAt).toLocaleTimeString()}.`);
+}
+
+// Empurra o proximo $pescar do canal para o fim da expedicao (+ atraso).
+async function postponeForExpedition(channel, st) {
+  const next = await mutateChannels((channels) => {
+    const s = channels[channel];
+    if (!s || !s.enabled) return null;
+    s.nextFireAt = Math.max(st.endsAt, Date.now() + EXPEDITION_OVERTIME_MS) + computeJitterMs(s);
     return s.nextFireAt;
   });
   if (next) await scheduleDueAlarm(channel, next);
@@ -1665,6 +1840,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if ("notifyAutomations" in patch) g.notifyAutomations = !!patch.notifyAutomations;
         if (patch.duelAccept) g.duelAccept = AT.sanitizeDuelAccept({ ...g.duelAccept, ...patch.duelAccept });
         if (patch.turboSell) g.turboSell = AT.sanitizeTurboSell({ ...g.turboSell, ...patch.turboSell });
+        if (patch.invDump) g.invDump = AT.sanitizeInvDump({ ...g.invDump, ...patch.invDump });
         if (patch.protection) g.protection = AT.sanitizeProtection({ ...g.protection, ...patch.protection });
         if (patch.shopList) g.shopList = AT.sanitizeShopList({ ...g.shopList, ...patch.shopList });
         if (patch.eventKit) g.eventKit = mergeEventKit(g.eventKit, patch.eventKit);
@@ -1677,6 +1853,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
       });
       if (patch.turboSell) await reevaluateTurboSell();
+      if (patch.invDump && typeof onInvDumpSettingsChanged === "function") onInvDumpSettingsChanged(null);
       if (patch.protection) onProtectionSettingsChanged(null);
       if (patch.shopList) await reevaluateShopping(null);
       if ((patch.eventKit || patch.tournament || patch.duelBait) && typeof onKitSettingsChanged === "function") onKitSettingsChanged(null);
@@ -1692,6 +1869,13 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Vem do content.js: mensagens do TwishGameBot lidas no chat.
   // Bot falou de verificacao marcando o jogador: confere a trava na hora.
+  if (msg?.type === "CHAT_EXPEDITION_DEPARTED") {
+    const channel = extractChannelFromUrl(sender?.tab?.url || "");
+    const mentions = Array.isArray(msg.mentions) ? msg.mentions.slice(0, 20).map((m) => String(m).toLowerCase()) : [];
+    if (channel) onExpeditionDepartedChat(channel, String(msg.sea || ""), mentions, msg.minutes);
+    return false;
+  }
+
   if (msg?.type === "CHAT_VERIFICATION_HINT") {
     (async () => {
       const general = await getGeneralSettings();
@@ -1710,6 +1894,16 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       onDuelInvite(channel, String(msg.challenger), String(msg.target), Math.max(1, Number(msg.windowSeconds) || 300));
     }
     return false;
+  }
+
+  // Popup: estado da expedicao (le da conta se estiver velho).
+  if (msg?.type === "GET_EXPEDITION") {
+    (async () => {
+      let st = await readExpeditionState();
+      if (msg.channel && !expeditionIsFresh(st)) st = (await refreshExpedition(msg.channel, "popup")) || st;
+      sendResponse({ expedition: st });
+    })();
+    return true;
   }
 
   // Popup/configuracoes: estado da trava de seguranca.
@@ -1742,7 +1936,10 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Vem do content.js: o jogador enviou o comando de pesca manualmente.
   if (msg?.type === "USER_SENT_COMMAND") {
     const channel = extractChannelFromUrl(sender?.tab?.url || "");
-    if (channel && msg.text === FIXED_MESSAGE) recordUserSent(channel);
+    if (channel && msg.text === FIXED_MESSAGE) {
+      recordUserSent(channel);
+      if (typeof scheduleInvDump === "function") scheduleInvDump(channel);
+    }
     else if (channel && typeof msg.text === "string" && msg.text.startsWith("$")) onUserOtherCommand(channel, msg.text);
     return false;
   }
@@ -1754,8 +1951,15 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg?.type === "SEND_NOW") {
     (async () => {
+      const exp = await expeditionBlocks(msg.channel, "popup");
+      if (exp) {
+        await postponeForExpedition(msg.channel, exp);
+        sendResponse({ ok: false, reason: "em-expedicao", settings: await getChannelSettings(msg.channel) });
+        return;
+      }
       const result = await attemptSend(msg.channel);
       await recordSendResult(msg.channel, result.ok); // so reagenda se o canal estiver ativado
+      if (result.ok && typeof scheduleInvDump === "function") scheduleInvDump(msg.channel);
       sendResponse({ ok: result.ok, reason: result.reason, settings: await getChannelSettings(msg.channel) });
     })();
     return true;
@@ -1764,7 +1968,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|event):([^:]+)/.exec(id);
+    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|invdump-auto|event):([^:]+)/.exec(id);
     if (!m) return;
     const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);

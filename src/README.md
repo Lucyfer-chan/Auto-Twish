@@ -1,4 +1,4 @@
-# Auto Twish — v 1.0.0
+# Auto Twish — v 1.0.1
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -122,6 +122,31 @@ enviado e o Mercado para; o popup e as configurações mostram um aviso e chega
 uma notificação. A extensão confere de 1 em 1 minuto e retoma sozinha quando
 a verificação sai. Ela só lê esse estado — nunca responde a verificação.
 
+## Trava da Expedição
+
+Durante uma Expedição (30 min no mar), o jogo só deixa pescar no barco (canal)
+por onde você zarpou, e não deixa duelar nem entrar em torneio em canal
+nenhum. Por isso, no mar:
+
+- o `$pescar` fica pausado em todos os outros canais e volta sozinho quando a
+  viagem acaba (no canal da expedição, a pesca continua normal);
+- o aceite automático de duelo e a entrada automática no torneio ficam
+  bloqueados em todos os canais.
+
+A extensão sabe que você zarpou de dois jeitos:
+
+- **pela conta**: antes de agir, consulta `/api/{canal}/expeditions`, que diz
+  se você está no mar, até quando e por qual canal saiu (precisa estar logado
+  no twish.com.br);
+- **pelo chat** (reserva, sem depender da API): a mensagem do bot
+  "⛵ Zarpou à Baía das Lendas: @você! Por 30 min o `$pescar` de vocês pesca
+  no mar." liga a trava na hora, com o canal da mensagem como canal da
+  expedição, até o fim dos minutos citados.
+
+Enquanto a sala ainda está aberta (antes de zarpar), nada é travado. O popup
+mostra "⚓ Em expedição" com o mar e o horário em que a pesca volta. A trava
+só lê o estado e fica sempre ligada.
+
 ## Mercado — aquisição automática
 
 Na página de configurações, seção "Mercado". Desligada por padrão.
@@ -168,6 +193,19 @@ Twitch precisa estar aberta.
   pesca, então a extensão confere a conta logo depois.
 - **Venda Turbinada** (`$vender todos`): uma vez por evento, X s antes do fim
   (padrão 30, até 5 s a mais aleatório). Peixes na `$whitelist` não são vendidos.
+- **Inv Dump** (`$vender <espécie> <qtd>`): depois de cada `$pescar` (da
+  extensão ou seu), lê o inventário do barco pela conta
+  (`/api/{canal}/me/inventory`, com preços e capacidade, que já inclui a
+  mochila) e mantém sempre 1 vaga livre no inventário e 1 em cada espécie
+  (sem mochila: 100 no total e 10 por espécie; as ascensões contam na mesma
+  espécie). Vende primeiro o peixe mais barato entre as espécies cheias; sem
+  espécie cheia e com o inventário cheio, o mais barato no geral. Em cada caso,
+  vêm primeiro os peixes de menor ascensão (não ascendidos antes) e, entre
+  eles, o mais barato. Nunca vende
+  espécie da whitelist, peixe anunciado no Mercado, Deuses Anciões nem as
+  raridades a partir do limite escolhido (padrão: Mítico em diante). Pelo chat
+  a extensão escolhe a espécie e a quantidade; qual peixe daquela espécie sai é
+  o jogo que decide.
 - **Proteção automática** (`$whitelist`): lista de espécies (padrão geral ou por
   canal). A whitelist do Twish é por barco; a extensão lê a whitelist de cada
   barco pela conta (`/api/{canal}/me/whitelist`) e manda `$whitelist <id>` só
@@ -188,6 +226,11 @@ Twitch precisa estar aberta.
   acabam). Sem o item, compra (`$comprar`) se permitido. Ativar item é feito
   pela API do site (`/me/use/{item}`, sem comando de chat — liberado pelo
   jogador). No fim, volta a isca de antes.
+  A **Sorte Rara** tem uma regra para cada raridade sorteada (Incomum, Raro,
+  Lendário, Mítico, Secreto, Divino), cada uma com sua isca, Turbo e Afiação;
+  vale a regra da raridade do evento (se vier mais de uma, a mais rara com
+  regra ligada). Raridade sem regra: nada é feito. Configurações antigas da
+  Sorte Rara viram a mesma regra em todas as raridades.
 - **Torneio** (lido em `/api/{canal}/tournament`, a cada 30 s e quando o bot
   fala de torneio com `$entrar`): entrada automática com regra "pescar antes"
   (se o CD acaba antes de fecharem as inscrições, pesca e entra logo depois;
@@ -213,7 +256,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 1.0.0 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 1.0.1 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -280,6 +323,20 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 1.0.1** — Trava da Expedição, Inv Dump e Sorte Rara por raridade.
+  - Trava da Expedição (sempre ligada): no mar (30 min), o `$pescar` só sai no
+    canal por onde você zarpou; aceite de duelo e entrada em torneio ficam
+    bloqueados em todos os canais. Detecta pela conta
+    (`/api/{canal}/expeditions`) e, como reserva sem API, pela mensagem do bot
+    "⛵ Zarpou à …: @você! Por 30 min…". Aviso "⚓ Em expedição" no popup.
+  - Inv Dump (desligado por padrão; geral + exceção por canal): depois de cada
+    pesca, mantém 1 vaga livre no inventário e 1 em cada espécie, vendendo
+    pelo chat (`$vender <espécie> <qtd>`) o mais barato (menor ascensão
+    primeiro) — primeiro entre as espécies cheias. Nunca vende whitelist,
+    peixe no Mercado, Deuses Anciões nem a partir da raridade escolhida
+    (padrão: Mítico).
+  - Sorte Rara: uma regra (isca, Turbo, Afiação) para cada raridade sorteada;
+    vale a da raridade do evento (a mais rara, se vier mais de uma).
 - **v 1.0.0 (lançamento)** — a v 0.5.3 promovida a versão de lançamento, nas
   duas variantes (Firefox e Chrome), com tudo funcionando nas duas. Código
   idêntico à v 0.5.3.

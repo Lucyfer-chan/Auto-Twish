@@ -65,6 +65,12 @@ AT.DEFAULT_GENERAL_SETTINGS = {
     enabled: false, // Venda Turbinada: $vender todos perto do fim do evento
     secondsBeforeEnd: 30
   },
+  // Inv Dump: vende os peixes mais baratos ($vender <especie> <qtd>) para
+  // manter sempre 1 vaga livre no inventario e 1 em cada especie.
+  invDump: {
+    enabled: false,
+    keepFromTier: "mythic" // nunca vende desta raridade em diante (null = sem limite)
+  },
   // Protecao automatica (Road Map item 7): mantem estas especies na whitelist
   // do jogo ($whitelist) em cada barco. So adiciona; nunca remove.
   protection: {
@@ -155,6 +161,104 @@ AT.effectiveDuelAccept = function (channelSettings, general) {
   const own = channelSettings && channelSettings.duelAccept;
   return AT.sanitizeDuelAccept(own || (general || AT.DEFAULT_GENERAL_SETTINGS).duelAccept);
 };
+// ---------------------------------------------------------------------------
+// Raridades do jogo (da mais comum para a mais rara)
+// ---------------------------------------------------------------------------
+AT.TIERS = ["common", "uncommon", "rare", "legendary", "mythic", "secret", "divine", "ancient_god"];
+AT.TIER_LABELS = {
+  common: "Comum",
+  uncommon: "Incomum",
+  rare: "Raro",
+  legendary: "Lendário",
+  mythic: "Mítico",
+  secret: "Secreto",
+  divine: "Divino",
+  ancient_god: "Deuses Anciões"
+};
+AT.tierRank = (t) => AT.TIERS.indexOf(t);
+
+// ---------------------------------------------------------------------------
+// Inv Dump
+// ---------------------------------------------------------------------------
+AT.SELL_COMMAND = "$vender";
+AT.INV_DUMP_KEEP_TIERS = ["uncommon", "rare", "legendary", "mythic", "secret", "divine"];
+AT.sanitizeInvDump = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  let keep = "mythic";
+  if (o.keepFromTier === null || o.keepFromTier === "") keep = null;
+  else if (AT.INV_DUMP_KEEP_TIERS.includes(o.keepFromTier)) keep = o.keepFromTier;
+  return { enabled: !!o.enabled, keepFromTier: keep };
+};
+AT.effectiveInvDump = function (channelSettings, general) {
+  const own = channelSettings && channelSettings.invDump;
+  return AT.sanitizeInvDump(own || (general || AT.DEFAULT_GENERAL_SETTINGS).invDump);
+};
+AT.describeInvDump = function (cfg) {
+  if (!cfg.enabled) return "desligado";
+  return cfg.keepFromTier ? `ligado, nunca vende de ${AT.TIER_LABELS[cfg.keepFromTier]} em diante` : "ligado, sem limite de raridade";
+};
+
+// Decide o que vender. inv = resposta de /api/{canal}/me/inventory;
+// opts = { whitelist: Set de especies protegidas, keepFromTier }.
+// Regra: uma especie esta cheia quando tem o maximo por especie (as ascensoes
+// somam na mesma especie); o inventario, quando tem o maximo total. Enquanto
+// houver especie cheia, vende entre as especies cheias; com o inventario cheio
+// e nenhuma especie cheia, vende no geral. Em cada caso, primeiro o de menor
+// ascensao (nao ascendidos primeiro) e, entre esses, o mais barato. Nunca vende: especie da whitelist,
+// raridade a partir de keepFromTier, Deuses Ancioes, raridade desconhecida e
+// peixe anunciado no Mercado (escrowed).
+// Devolve { sells: [{ id, qty, coins }], total, capTotal, capSpecies, blocked: [ids cheios sem o que vender] }.
+AT.planInvDump = function (inv, opts) {
+  const o = opts || {};
+  const wl = o.whitelist instanceof Set ? o.whitelist : new Set(o.whitelist || []);
+  const cap = (inv && inv.capacity) || {};
+  const capTotal = Number(cap.max_fish_total) || 0;
+  const capSpecies = Number(cap.max_fish_per_species) || 0;
+  const out = { sells: [], total: 0, capTotal, capSpecies, blocked: [] };
+  if (!capTotal || !capSpecies || !inv || !Array.isArray(inv.fish)) return out;
+  const keepRank = o.keepFromTier ? AT.tierRank(o.keepFromTier) : Infinity;
+
+  const counts = new Map();
+  const pool = [];
+  let sum = 0;
+  for (const st of inv.fish) {
+    if (!st) continue;
+    const id = String(st.fish_id || st.id || "");
+    if (!AT.FISH_ID_RE.test(id)) continue;
+    const n = Number(st.count) || 0;
+    counts.set(id, (counts.get(id) || 0) + n);
+    sum += n;
+    const rank = AT.tierRank(st.tier);
+    const sellable = !wl.has(id) && rank >= 0 && st.tier !== "ancient_god" && rank < keepRank;
+    if (!sellable) continue;
+    for (const i of Array.isArray(st.instances) ? st.instances : []) {
+      const price = Number(i && i.price);
+      if (i && !i.escrowed && Number.isFinite(price)) pool.push({ id, price, asc: Number(st.ascension_level) || 0 });
+    }
+  }
+  let total = Number.isFinite(Number(inv.total)) ? Number(inv.total) : sum;
+  out.total = total;
+  pool.sort((a, b) => a.asc - b.asc || a.price - b.price); // menor ascensao, depois mais barato
+
+  const sold = new Map();
+  for (let guard = 0; guard < 1000; guard++) {
+    const full = new Set([...counts].filter(([, n]) => n >= capSpecies).map(([id]) => id));
+    let idx = pool.findIndex((p) => full.has(p.id)); // primeiro entre as especies cheias
+    if (idx < 0 && total >= capTotal) idx = pool.length ? 0 : -1; // senao, no geral
+    if (idx < 0) break;
+    const pick = pool.splice(idx, 1)[0];
+    counts.set(pick.id, counts.get(pick.id) - 1);
+    total--;
+    const r = sold.get(pick.id) || { id: pick.id, qty: 0, coins: 0 };
+    r.qty++;
+    r.coins += pick.price;
+    sold.set(pick.id, r);
+  }
+  out.sells = [...sold.values()];
+  out.blocked = [...counts].filter(([, n]) => n >= capSpecies).map(([id]) => id);
+  return out;
+};
+
 AT.effectiveTurboSell = function (channelSettings, general) {
   const own = channelSettings && channelSettings.turboSell;
   return AT.sanitizeTurboSell(own || (general || AT.DEFAULT_GENERAL_SETTINGS).turboSell);
@@ -300,11 +404,59 @@ AT.sanitizeKitEntry = function (x) {
     sharpenBuy: !!o.sharpenBuy
   };
 };
+// Sorte Rara: uma regra (isca + reforcos) por raridade sorteada.
+// { enabled, tiers: { uncommon: entrada, rare: entrada, ... } }
+AT.LUCK_KIND = "tier_catch_boost";
+AT.LUCK_TIERS = ["uncommon", "rare", "legendary", "mythic", "secret", "divine"];
+AT.sanitizeLuckKit = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  const hasTiers = o.tiers && typeof o.tiers === "object";
+  // Formato antigo (uma regra so para a Sorte Rara): vale para todas as raridades.
+  const legacy = !hasTiers && (o.baitId || o.turbo || o.sharpen) ? { ...o, enabled: true } : null;
+  const tiers = {};
+  for (const t of AT.LUCK_TIERS) tiers[t] = AT.sanitizeKitEntry(hasTiers ? o.tiers[t] : legacy);
+  return { enabled: !!o.enabled, tiers };
+};
 AT.sanitizeEventKit = function (x) {
   const o = x && typeof x === "object" ? x : {};
   const out = {};
-  for (const k of AT.KIT_EVENTS) out[k] = AT.sanitizeKitEntry(o[k]);
+  for (const k of AT.KIT_EVENTS) out[k] = k === AT.LUCK_KIND ? AT.sanitizeLuckKit(o[k]) : AT.sanitizeKitEntry(o[k]);
   return out;
+};
+// Raridades sorteadas num evento Sorte Rara (ids), da mais rara para a mais comum.
+AT.eventTiers = function (e) {
+  const ids = new Set();
+  const byLabel = Object.fromEntries(Object.entries(AT.TIER_LABELS).map(([id, l]) => [l.toLowerCase(), id]));
+  for (const t of Array.isArray(e && e.tiers) ? e.tiers : []) {
+    const v = typeof t === "string" ? t : t && (t.id || t.tier);
+    if (AT.tierRank(v) >= 0) ids.add(v);
+    else if (typeof v === "string" && byLabel[v.toLowerCase()]) ids.add(byLabel[v.toLowerCase()]);
+  }
+  for (const l of Array.isArray(e && e.tier_labels) ? e.tier_labels : []) {
+    const id = typeof l === "string" && byLabel[l.toLowerCase()];
+    if (id) ids.add(id);
+  }
+  if (!ids.size && e && typeof e.message === "string") {
+    const m = /peixe\s+([^\s]+)\s+em dobro/i.exec(e.message);
+    const id = m && byLabel[m[1].toLowerCase()];
+    if (id) ids.add(id);
+  }
+  return [...ids].sort((a, b) => AT.tierRank(b) - AT.tierRank(a));
+};
+// Regra que vale para um evento: { entry, tier } ou null.
+AT.kitEntryForEvent = function (kit, e) {
+  if (!e || !AT.KIT_EVENTS.includes(e.kind)) return null;
+  const k = kit[e.kind];
+  if (e.kind !== AT.LUCK_KIND) return AT.kitIsActive(k) ? { entry: k, tier: null } : null;
+  if (!k || !k.enabled) return null;
+  for (const t of AT.eventTiers(e)) if (AT.kitIsActive(k.tiers[t])) return { entry: k.tiers[t], tier: t };
+  return null;
+};
+// Regra guardada no contexto do evento (kind + raridade).
+AT.kitEntryOf = function (kit, kind, tier) {
+  const k = kit[kind];
+  if (kind !== AT.LUCK_KIND) return k;
+  return k && k.enabled && tier ? k.tiers[tier] : null;
 };
 AT.sanitizeTournament = function (x) {
   const o = x && typeof x === "object" ? x : {};
@@ -333,13 +485,18 @@ AT.effectiveDuelBait = function (s, g) {
   return AT.sanitizeDuelBait((s && s.duelBait) || (g || AT.DEFAULT_GENERAL_SETTINGS).duelBait);
 };
 AT.kitIsActive = function (e) {
+  if (e && e.tiers) return !!(e.enabled && AT.LUCK_TIERS.some((t) => AT.kitIsActive(e.tiers[t])));
   return !!(e && e.enabled && (e.baitId || e.turbo || e.sharpen));
 };
 AT.tournamentIsActive = function (t) {
   return !!(t && (t.join || t.baitId || t.boost || t.grease));
 };
 AT.describeEventKit = function (kit) {
-  const on = AT.KIT_EVENTS.filter((k) => AT.kitIsActive(kit[k])).map((k) => AT.KIT_EVENT_LABELS[k]);
+  const on = AT.KIT_EVENTS.filter((k) => AT.kitIsActive(kit[k])).map((k) => {
+    if (k !== AT.LUCK_KIND) return AT.KIT_EVENT_LABELS[k];
+    const ts = AT.LUCK_TIERS.filter((t) => AT.kitIsActive(kit[k].tiers[t])).map((t) => AT.TIER_LABELS[t]);
+    return `${AT.KIT_EVENT_LABELS[k]} (${ts.join(", ")})`;
+  });
   return on.length ? `ligado: ${on.join(", ")}` : "desligado";
 };
 AT.describeTournament = function (t) {
@@ -372,6 +529,7 @@ AT.mergeGeneral = function (saved) {
     semiAuto: { ...AT.DEFAULT_GENERAL_SETTINGS.semiAuto, ...(g.semiAuto || {}) },
     duelAccept: AT.sanitizeDuelAccept(g.duelAccept),
     turboSell: AT.sanitizeTurboSell(g.turboSell),
+    invDump: AT.sanitizeInvDump(g.invDump),
     protection: AT.sanitizeProtection(g.protection),
     shopList: AT.sanitizeShopList(g.shopList),
     eventKit: AT.sanitizeEventKit(g.eventKit),
@@ -391,6 +549,7 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   notifyEvents: false, // notificacao quando comeca um evento neste canal
   duelAccept: null, // null = usa o valor geral; objeto = excecao deste canal
   turboSell: null, // idem
+  invDump: null, // idem
   protection: null, // idem
   shopList: null, // idem
   eventKit: null, // idem
@@ -472,6 +631,14 @@ AT.browserName = function () {
     if (typeof browser !== "undefined" && browser.runtime && typeof browser.runtime.getBrowserInfo === "function") return "Firefox";
   } catch (e) {}
   return "Chrome";
+};
+
+// Mares da Expedicao (id da API -> nome no site).
+AT.EXPEDITION_SEAS = {
+  baia: "Baía das Lendas",
+  sereias: "Mar das Sereias",
+  abismo: "Abismo dos Deuses",
+  fenda: "Fenda do Fim"
 };
 
 // "mm:ss" (sem milissegundos).

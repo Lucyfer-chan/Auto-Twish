@@ -286,8 +286,51 @@ async function renderSafety() {
   } catch (e) {}
 }
 
+// Expedicao: no mar, o $pescar so sai no canal por onde o jogador zarpou.
+let expedition = null;
+let expeditionTimer = null;
+
+function renderExpedition() {
+  const line = $("expeditionLine");
+  const st = expedition;
+  if (!st || !st.atSea || Date.now() >= st.endsAt) {
+    line.hidden = true;
+    return;
+  }
+  const sea = (st.sea && AT.EXPEDITION_SEAS[st.sea]) || st.seaName || "expedição";
+  const until = new Date(st.endsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const here = st.boat && currentChannel && st.boat === currentChannel;
+  line.textContent = "";
+  line.append("⚓ ");
+  const strong = document.createElement("strong");
+  strong.textContent = `Em expedição — ${sea}`;
+  line.append(strong);
+  line.append(
+    here
+      ? `. Você zarpou por este canal: aqui a pesca continua. Nos outros canais o $pescar volta às ${until}.`
+      : st.boat
+        ? `, pelo canal ${st.boat}. $pescar pausado aqui até ${until} (volta sozinho).`
+        : `. $pescar pausado até ${until} (volta sozinho).`
+  );
+  line.hidden = false;
+}
+
+async function loadExpedition() {
+  try {
+    const r = await browser.runtime.sendMessage({ type: "GET_EXPEDITION", channel: currentChannel || null });
+    expedition = r && r.expedition;
+  } catch (e) {}
+  renderExpedition();
+  clearInterval(expeditionTimer);
+  expeditionTimer = setInterval(renderExpedition, 15000); // esconde sozinha quando a viagem acaba
+}
+
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.safety) renderSafety();
+  if (area === "local" && changes.expedition) {
+    expedition = changes.expedition.newValue || null;
+    renderExpedition();
+  }
   if (area === "local" && changes.gameState && currentChannel) {
     gameState = (changes.gameState.newValue || {})[currentChannel] || {};
     renderGame();
@@ -340,6 +383,7 @@ async function load() {
   const url = await getActiveTabUrl();
   const { channel, settings } = await browser.runtime.sendMessage({ type: "GET_SETTINGS_FOR_ACTIVE_TAB", url });
   currentChannel = channel;
+  loadExpedition(); // nao espera: le da conta se o estado estiver velho
 
   if (!channel) {
     channelLabelEl.textContent = "Abra a aba de um canal da Twitch (ex: twitch.tv/seucanal) para configurar.";

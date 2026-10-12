@@ -253,6 +253,9 @@ const FEATURED_RE = /Peixe em destaque:\s*([^.!?\n]+)/i;
 // entre os marcados.
 const DUEL_WORD_RE = /\bduelo\b/i;
 const DUEL_RESULT_RE = /\b(venceu|perdeu|empat\w*)\b/i;
+// Partida de expedicao: "⛵ Zarpou à Baía das Lendas: @a, @b e @c! Por 30 min
+// o $pescar de vocês pesca no mar."
+const EXPEDITION_DEPART_RE = /Zarpou\s+(?:(?:à|ao|a|para|pro|pra)\s+)?(.+?):\s*(.*?)!\s*Por\s+(\d+)\s*min/i;
 const DUEL_INVITE_RE = /@(\w+)\s+desafiou\s+@(\w+)\s+pra um duelo!.*?tem\s+(?:(\d+)m)?\s*(?:(\d+)s)?\s*pra usar\s+\$aceitar/i;
 
 function chatLineAuthor(node) {
@@ -282,6 +285,15 @@ function handleChatLine(node) {
   // background conferir a API do torneio na hora (o formato exato nao importa).
   if (/torneio/i.test(text) && /\$(entrar|join)\b/i.test(text)) {
     browser.runtime.sendMessage({ type: "CHAT_TOURNAMENT_HINT" }).catch(() => {});
+  }
+
+  const departed = EXPEDITION_DEPART_RE.exec(text);
+  if (departed) {
+    const mentions = [...departed[2].matchAll(/@(\w+)/g)].map((m) => m[1]);
+    browser.runtime
+      .sendMessage({ type: "CHAT_EXPEDITION_DEPARTED", sea: departed[1].trim(), mentions, minutes: parseInt(departed[3], 10) })
+      .catch(() => {});
+    return;
   }
 
   const featured = FEATURED_RE.exec(text);

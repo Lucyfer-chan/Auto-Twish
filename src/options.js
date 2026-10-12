@@ -430,34 +430,66 @@ function mountKitEditor(host, save) {
       text: "Enquanto o evento durar: equipa a isca escolhida ($isca) e mantém ativos o Turbo de Pesca (Impulso) e/ou a Afiação de Anzol (Cuidado), renovando quando acabam. Sem o item no inventário, compra ($comprar) se você permitir. Ativar o item é feito pelo site (não existe comando de chat para isso). No fim do evento, volta a isca que você estava usando."
     })
   );
-  const rows = {};
-  for (const kind of AT.KIT_EVENTS) {
-    const on = checkRow(h("strong", { text: AT.KIT_EVENT_LABELS[kind] }));
+  // Campos de uma regra (isca + Turbo + Afiacao). send(patch) grava a regra.
+  function entryFields(send, baitLabel) {
     const bait = baitSelect();
     const turbo = checkRow("Ativar Turbo de Pesca (20 s de CD por 5 min)");
     const turboBuy = checkRow("comprar se não tiver");
     const sharpen = checkRow("Ativar Afiação de Anzol (+5% pontos e XP por 30 min)");
     const sharpenBuy = checkRow("comprar se não tiver");
-    const sub = h(
+    const el = h(
       "div",
       { class: "kit-sub" },
-      h("div", { class: "acq-field", style: "max-width:320px;margin-top:6px" }, h("label", { text: "Isca durante o evento" }), bait),
+      h("div", { class: "acq-field", style: "max-width:320px;margin-top:6px" }, h("label", { text: baitLabel }), bait),
       turbo.row,
       h("div", { class: "kit-sub" }, turboBuy.row),
       sharpen.row,
       h("div", { class: "kit-sub" }, sharpenBuy.row)
     );
-    const box = h("div", { class: "kit-event" }, on.row, sub);
-    on.row.style.marginTop = "0";
-    host.append(box);
-    const send = (p) => save({ [kind]: p });
-    on.cb.addEventListener("change", () => send({ enabled: on.cb.checked }));
     bait.addEventListener("change", () => send({ baitId: bait.value || null }));
     turbo.cb.addEventListener("change", () => send({ turbo: turbo.cb.checked }));
     turboBuy.cb.addEventListener("change", () => send({ turboBuy: turboBuy.cb.checked }));
     sharpen.cb.addEventListener("change", () => send({ sharpen: sharpen.cb.checked }));
     sharpenBuy.cb.addEventListener("change", () => send({ sharpenBuy: sharpenBuy.cb.checked }));
-    rows[kind] = { on, sub, bait, turbo, turboBuy, sharpen, sharpenBuy };
+    return {
+      el,
+      render(e) {
+        setBait(bait, e.baitId);
+        turbo.cb.checked = e.turbo;
+        turboBuy.cb.checked = e.turboBuy;
+        turboBuy.row.hidden = !e.turbo;
+        sharpen.cb.checked = e.sharpen;
+        sharpenBuy.cb.checked = e.sharpenBuy;
+        sharpenBuy.row.hidden = !e.sharpen;
+      }
+    };
+  }
+
+  const rows = {};
+  for (const kind of AT.KIT_EVENTS) {
+    const luck = kind === AT.LUCK_KIND;
+    const on = checkRow(h("strong", { text: AT.KIT_EVENT_LABELS[kind] }), luck ? "Uma regra para cada raridade sorteada pelo evento. Vale a regra da raridade do evento; raridade sem regra ligada, nada é feito." : null);
+    on.row.style.marginTop = "0";
+    const send = (p) => save({ [kind]: p });
+    on.cb.addEventListener("change", () => send({ enabled: on.cb.checked }));
+    if (!luck) {
+      const f = entryFields(send, "Isca durante o evento");
+      host.append(h("div", { class: "kit-event" }, on.row, f.el));
+      rows[kind] = { on, sub: f.el, f };
+      continue;
+    }
+    const tierRows = {};
+    const sub = h("div");
+    for (const t of AT.LUCK_TIERS) {
+      const tOn = checkRow(h("span", {}, "Sorte Rara de peixe ", h("strong", { text: AT.TIER_LABELS[t] })));
+      const tSend = (p) => send({ tiers: { [t]: p } });
+      tOn.cb.addEventListener("change", () => tSend({ enabled: tOn.cb.checked }));
+      const f = entryFields(tSend, `Isca na Sorte Rara (${AT.TIER_LABELS[t]})`);
+      sub.append(h("div", { class: "kit-tier" }, tOn.row, f.el));
+      tierRows[t] = { on: tOn, f };
+    }
+    host.append(h("div", { class: "kit-event" }, on.row, sub));
+    rows[kind] = { on, sub, tierRows };
   }
   return function render(next) {
     const kit = AT.sanitizeEventKit(next);
@@ -466,14 +498,42 @@ function mountKitEditor(host, save) {
       const e = kit[kind];
       r.on.cb.checked = e.enabled;
       r.sub.hidden = !e.enabled;
-      setBait(r.bait, e.baitId);
-      r.turbo.cb.checked = e.turbo;
-      r.turboBuy.cb.checked = e.turboBuy;
-      r.turboBuy.row.hidden = !e.turbo;
-      r.sharpen.cb.checked = e.sharpen;
-      r.sharpenBuy.cb.checked = e.sharpenBuy;
-      r.sharpenBuy.row.hidden = !e.sharpen;
+      if (r.f) r.f.render(e);
+      else
+        for (const t of AT.LUCK_TIERS) {
+          const tr = r.tierRows[t];
+          tr.on.cb.checked = e.tiers[t].enabled;
+          tr.f.el.hidden = !e.tiers[t].enabled;
+          tr.f.render(e.tiers[t]);
+        }
     }
+  };
+}
+
+function mountInvDumpEditor(host, save) {
+  const on = checkRow(
+    h("span", {}, h("strong", { text: "Inv Dump" }), " ", h("span", { class: "hint", text: "($vender <espécie> <qtd>)" })),
+    "Depois de cada pesca, mantém sempre 1 vaga livre no inventário e 1 em cada espécie (a mochila conta). Vende primeiro o peixe mais barato entre as espécies cheias; sem espécie cheia e com o inventário cheio, o mais barato no geral. Nunca vende espécies da whitelist. Pelo chat, o jogo escolhe qual peixe da espécie sai."
+  );
+  on.row.style.marginTop = "0";
+  const keep = h("select");
+  keep.append(h("option", { value: "", text: "— sem limite —" }));
+  for (const t of AT.INV_DUMP_KEEP_TIERS) keep.append(h("option", { value: t, text: `${AT.TIER_LABELS[t]} em diante` }));
+  const field = h(
+    "div",
+    { class: "acq-field", style: "max-width:320px;margin:8px 0 0 26px" },
+    h("label", { text: "Nunca vender" }),
+    keep,
+    h("div", { class: "field-hint", text: "raridades protegidas do Inv Dump" })
+  );
+  host.append(on.row, field);
+  on.cb.addEventListener("change", () => save({ enabled: on.cb.checked }));
+  keep.addEventListener("change", () => save({ keepFromTier: keep.value || null }));
+  return function render(next) {
+    const c = AT.sanitizeInvDump(next);
+    on.cb.checked = c.enabled;
+    field.hidden = !c.enabled;
+    if (document.activeElement !== keep) keep.value = c.keepFromTier || "";
   };
 }
 
@@ -558,6 +618,7 @@ function mountDuelBaitEditor(host, save) {
 
 const renderGeneralDuel = mountDuelEditor($("generalDuel"), (patch) => updateGeneral({ duelAccept: patch }));
 const renderGeneralSell = mountSellEditor($("generalSell"), (patch) => updateGeneral({ turboSell: patch }));
+const renderGeneralInvDump = mountInvDumpEditor($("generalInvDump"), (patch) => updateGeneral({ invDump: patch }));
 const renderGeneralProtect = mountProtectEditor($("generalProtect"), (patch) => updateGeneral({ protection: patch }));
 const renderGeneralShop = mountShopEditor($("generalShop"), (patch) => updateGeneral({ shopList: patch }));
 const renderGeneralKit = mountKitEditor($("generalKit"), (patch) => updateGeneral({ eventKit: patch }));
@@ -584,6 +645,7 @@ function renderGeneral() {
   notifyAutomationsEl.checked = !!g.notifyAutomations;
   renderGeneralDuel(g.duelAccept);
   renderGeneralSell(g.turboSell);
+  renderGeneralInvDump(g.invDump);
   renderGeneralProtect(g.protection);
   renderGeneralShop(g.shopList);
   renderGeneralKit(g.eventKit);
@@ -671,7 +733,8 @@ function createCard(name) {
   for (const [key, cls, mount] of [
     ["eventKit", "kit", mountKitEditor],
     ["tournament", "tourney", mountTourneyEditor],
-    ["duelBait", "duelbait", mountDuelBaitEditor]
+    ["duelBait", "duelbait", mountDuelBaitEditor],
+    ["invDump", "invdump", mountInvDumpEditor]
   ]) {
     const def = q(`.js-${cls}-default`);
     const hostEl = q(`.js-${cls}-host`);
@@ -798,7 +861,8 @@ function renderCard(name) {
   for (const [key, cls, describe, sanitize] of [
     ["eventKit", "kit", AT.describeEventKit, AT.sanitizeEventKit],
     ["tournament", "tourney", AT.describeTournament, AT.sanitizeTournament],
-    ["duelBait", "duelbait", AT.describeDuelBait, AT.sanitizeDuelBait]
+    ["duelBait", "duelbait", AT.describeDuelBait, AT.sanitizeDuelBait],
+    ["invDump", "invdump", AT.describeInvDump, AT.sanitizeInvDump]
   ]) {
     els[`${cls}Default`].checked = !s[key];
     els[`${cls}Summary`].textContent = describe(sanitize(g[key]));

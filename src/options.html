@@ -422,6 +422,14 @@
   .kit-sub {
     margin-left: 26px;
   }
+  .kit-tier {
+    margin: 10px 0 0 4px;
+    padding-left: 10px;
+    border-left: 2px solid var(--border, #444);
+  }
+  .kit-tier > .check-row {
+    margin-top: 0;
+  }
   .kit-sub .check-row {
     margin-top: 6px;
   }
@@ -497,6 +505,7 @@
     <div class="hint" style="margin-top:0">Tudo começa desligado. Cada canal pode ter uma exceção própria (no cartão do canal, abaixo). Os comandos são enviados no chat da Twitch — a aba do canal precisa estar aberta — um por vez, com intervalo aleatório entre eles, e param durante a verificação do Twish.</div>
     <div id="generalDuel" class="setting"></div>
     <div id="generalSell" class="setting"></div>
+    <div id="generalInvDump" class="setting"></div>
     <div id="generalProtect" class="setting"></div>
     <div id="generalShop" class="setting"></div>
     <div id="generalKit" class="setting"></div>
@@ -505,7 +514,7 @@
     <div class="setting">
       <label class="check-row" style="margin-top:0">
         <input type="checkbox" id="notifyAutomations" />
-        <span>Avisar quando uma automação agir (duelo aceito, venda feita)</span>
+        <span>Avisar quando uma automação agir (duelo aceito, venda feita, Inv Dump)</span>
       </label>
     </div>
   </section>
@@ -656,6 +665,11 @@
         <span>Venda Turbinada: usar o padrão geral <span class="hint">(<span class="js-sell-summary"></span>)</span></span>
       </label>
       <div class="auto-override js-sell-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-invdump-default" />
+        <span>Inv Dump: usar o padrão geral <span class="hint">(<span class="js-invdump-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-invdump-host"></div>
       <label class="check-row">
         <input type="checkbox" class="js-protect-default" />
         <span>Proteção: usar o padrão geral <span class="hint">(<span class="js-protect-summary"></span>)</span></span>
