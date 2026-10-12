@@ -208,14 +208,34 @@ function renderGame() {
     span.append(strong, ` — ${AT.formatRemaining(duelLeft)} pra usar $aceitar`);
     duelLine.append(span);
     duelLine.hidden = false;
-  } else if (cdLeft > 0) {
+  } else {
+    // Contador de CD de duelo (sempre visivel no canal).
+    const ds = gameState.duelSettings || {};
+    const cdMin = Math.round((ds.cooldownSec ? ds.cooldownSec : AT.DUEL_COOLDOWN_MS / 1000) / 60);
     const span = document.createElement("span");
-    span.className = "label";
-    span.textContent = `⚔️ Próximo duelo em ${AT.formatRemaining(cdLeft)}`;
+    if (ds.enabled === false) {
+      span.className = "label";
+      span.textContent = "⚔️ Duelos desligados neste canal";
+    } else if (cdLeft > 0) {
+      const strong = document.createElement("strong");
+      strong.textContent = AT.formatRemaining(cdLeft);
+      span.append("⚔️ ", Object.assign(document.createElement("span"), { className: "label", textContent: "Próximo duelo em " }), strong);
+      const bar = document.createElement("span");
+      bar.className = "label";
+      bar.textContent = ` (CD de ${cdMin} min · às ${new Date(gameState.duelCooldownUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`;
+      span.append(bar);
+    } else {
+      span.append("⚔️ ", Object.assign(document.createElement("span"), { className: "label", textContent: "Duelo: " }));
+      const strong = document.createElement("strong");
+      strong.textContent = "liberado";
+      span.append(strong);
+      const hint = document.createElement("span");
+      hint.className = "label";
+      hint.textContent = gameState.duelEndedAt ? ` (último terminou ${ago(now - gameState.duelEndedAt)})` : ` (CD de ${cdMin} min depois de cada duelo)`;
+      span.append(hint);
+    }
     duelLine.append(span);
     duelLine.hidden = false;
-  } else {
-    duelLine.hidden = true;
   }
 }
 

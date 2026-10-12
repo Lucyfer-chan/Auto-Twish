@@ -1,4 +1,4 @@
-# Auto Twish — v 1.0.2
+# Auto Twish — v 1.0.3
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -233,14 +233,26 @@ Twitch precisa estar aberta.
   para o que falta, na hora (sem o intervalo da fila) — ao mudar a lista, a cada 30 min e logo antes da Venda
   Turbinada. Só adiciona: tirar da lista não remove do jogo. Id recusado 2x
   pelo jogo deixa de ser enviado. Status e "Conferir agora" no cartão do canal.
+  **Por raridade** (opcional, "X em diante"): protege também as espécies do
+  inventário do barco dessa raridade para cima — as que você já tem e as que
+  forem chegando (confere uns 6 s depois de cada pesca). O Inv Dump também nunca
+  vende essa raridade.
 - **Lista de Compras no Desconto na Loja** (`$comprar <id> [qtd]`): padrão
   geral ou por canal. No evento Desconto na Loja, compra 5–20 s depois, uma vez
   por desconto, na ordem da lista (prioridade); sem moedas para um item, passa
   ao próximo. Modos: compra única (quantidade total), recorrente (quantidade por
   desconto), recorrente sem limite (até a reserva). Reserva de moedas
   configurável. Saldo por barco lido pela conta (sem login, não compra); relê o
-  saldo após cada compra para confirmar. Varas/anzóis/mochilas: 1, pula se já
-  tem ou falta o anterior. Fora: Turbo Torneio e tickets.
+  saldo após cada compra para confirmar. Fora: Turbo Torneio, tickets e (desde a
+  1.0.3) varas, mochilas e anzóis, que ficam com o Aprimoramento automático.
+- **Aprimoramento automático** (`$comprar`, desligado por padrão; geral +
+  exceção por canal): compra o próximo nível de vara, mochila e anzol (cada um
+  exige o anterior), na ordem de prioridade escolhida; sem moedas para um,
+  passa ao próximo. Quando: "assim que tiver dinheiro" (confere depois de cada
+  pesca, a cada 10 min e no início de um Desconto na Loja) ou "só durante o
+  Desconto na Loja" (preço com desconto). Usa a mesma reserva de moedas da Lista
+  de Compras (o campo aparece nas duas seções e é um valor só). Saldo e itens
+  por barco, lidos pela conta.
 - **Eventos — isca e reforços** (XP em Dobro, Maré Turbo, Sorte Rara, cada
   um com sua configuração): equipa a isca escolhida (`$isca`) enquanto o evento
   durar e mantém o Turbo de Pesca e/ou a Afiação de Anzol ativos (renova quando
@@ -277,7 +289,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 1.0.2 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 1.0.3 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -344,6 +356,21 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 1.0.3** — Proteção por raridade, Aprimoramento automático e contador de
+  CD de duelo.
+  - Contador de CD de duelo no popup (sempre visível no canal): convite
+    pendente, "Próximo duelo em mm:ss" ou "Duelo: liberado". Usa o CD pós-duelo
+    que o streamer configurou (`/api/{canal}/settings` →
+    `duel_cooldown_seconds`; sem leitura, 30 min) e avisa se os duelos estão
+    desligados no canal. O CD começa quando o bot anuncia o fim do seu duelo.
+  - Proteção: opção "X em diante" — protege as espécies do inventário de cada
+    barco dessa raridade para cima (as que já tem e as que chegarem; confere
+    depois de cada pesca). O Inv Dump também nunca vende essa raridade.
+  - Aprimoramento automático (desligado por padrão; geral + exceção por canal):
+    próximo nível de vara, mochila e anzol pelo chat, na ordem escolhida;
+    "assim que tiver dinheiro" ou "só no Desconto na Loja"; reserva de moedas
+    compartilhada com a Lista de Compras. Varas, mochilas e anzóis saíram da
+    Lista de Compras.
 - **v 1.0.2** — Embarque automático nas expedições (desligado por padrão;
   geral + exceção por canal): com a sala anunciada no chat de um canal
   ativado, entra e confirma a prontidão pela API do site (exceção liberada

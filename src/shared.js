@@ -87,6 +87,9 @@ AT.DEFAULT_GENERAL_SETTINGS = {
     reserve: 0, // a lista nunca deixa o saldo abaixo disso
     items: [] // [{ key, itemId, name, mode: "once"|"recurring"|"unlimited", quantity, enabled }]
   },
+  // Aprimoramento automatico: varas, mochilas e anzois ($comprar), com a
+  // reserva da Lista de Compras.
+  autoUpgrade: null, // preenchido por AT.sanitizeAutoUpgrade
   // Isca e reforcos por evento (Road Map item 3): XP em Dobro, Mare Turbo, Sorte Rara.
   eventKit: null, // preenchido por AT.sanitizeEventKit
   // Torneio: entrada automatica ($entrar), isca durante o torneio, Turbo Torneio.
@@ -281,6 +284,7 @@ AT.duelAcceptDecision = function (cfg, { remainingMs }) {
 // Id de especie do jogo: minusculas, numeros e "_" (ex: aruana_asiatica).
 AT.FISH_ID_RE = /^[a-z0-9_]{1,60}$/;
 AT.PROTECT_MAX_FISH = 100;
+AT.PROTECT_TIERS = ["uncommon", "rare", "legendary", "mythic", "secret", "divine"];
 AT.WHITELIST_COMMAND = "$whitelist";
 
 AT.sanitizeProtection = function (x) {
@@ -294,7 +298,13 @@ AT.sanitizeProtection = function (x) {
     fish.push({ id, name: typeof f.name === "string" && f.name.trim() ? f.name.trim().slice(0, 60) : id });
     if (fish.length >= AT.PROTECT_MAX_FISH) break;
   }
-  return { enabled: !!o.enabled, fish };
+  // fromTier: protege tambem as especies que o jogador tem desta raridade em diante (null = so a lista).
+  const fromTier = AT.PROTECT_TIERS.includes(o.fromTier) ? o.fromTier : null;
+  return { enabled: !!o.enabled, fish, fromTier };
+};
+// A Protecao tem algo a fazer? (lista de especies ou raridade)
+AT.protectionActive = function (cfg) {
+  return !!(cfg && cfg.enabled && (cfg.fish.length || cfg.fromTier));
 };
 AT.effectiveProtection = function (channelSettings, general) {
   const own = channelSettings && channelSettings.protection;
@@ -302,16 +312,27 @@ AT.effectiveProtection = function (channelSettings, general) {
 };
 AT.describeProtection = function (cfg) {
   const n = cfg.fish.length;
-  if (!cfg.enabled) return n ? `desligado, ${n} espécie${n === 1 ? "" : "s"} na lista` : "desligado";
-  return `ligado, ${n} espécie${n === 1 ? "" : "s"}`;
+  const tier = cfg.fromTier ? `${AT.TIER_LABELS[cfg.fromTier]} em diante` : "";
+  const list = n ? `${n} espécie${n === 1 ? "" : "s"}` : "";
+  const what = [list, tier].filter(Boolean).join(" + ");
+  if (!cfg.enabled) return what ? `desligado, ${what}` : "desligado";
+  return what ? `ligado, ${what}` : "ligado, nada escolhido";
+};
+// Menor (mais comum) entre duas raridades-limite; null = sem limite.
+AT.minTier = function (a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return AT.tierRank(a) <= AT.tierRank(b) ? a : b;
 };
 
 // ---------------------------------------------------------------------------
 // Lista de Compras
 // ---------------------------------------------------------------------------
 AT.BUY_COMMAND = "$comprar";
-// Categorias da loja que entram no desconto (as mesmas que o site usa).
-AT.SHOP_CATEGORIES = ["rods", "hooks", "backpacks", "baits", "boosters", "incubators", "fertilizers", "upkeep"];
+// Categorias da Lista de Compras. Varas, anzois e mochilas ficam com o
+// Aprimoramento automatico (desde a 1.0.3).
+AT.SHOP_CATEGORIES = ["baits", "boosters", "incubators", "fertilizers", "upkeep"];
+AT.UPGRADE_ITEM_RE = /^(vara|anzol|mochila)_/;
 AT.SHOP_CATEGORY_LABELS = {
   rods: "Varas",
   hooks: "Anzóis",
@@ -335,6 +356,7 @@ AT.sanitizeShopItem = function (e) {
   if (!e || typeof e !== "object") return null;
   const itemId = typeof e.itemId === "string" ? e.itemId.trim().toLowerCase() : "";
   if (!AT.FISH_ID_RE.test(itemId)) return null;
+  if (AT.UPGRADE_ITEM_RE.test(itemId)) return null; // vara/anzol/mochila: agora no Aprimoramento
   const mode = AT.SHOP_MODES.includes(e.mode) ? e.mode : "once";
   return {
     key: typeof e.key === "string" && e.key ? e.key.slice(0, 40) : `${itemId}-${Math.random().toString(36).slice(2, 8)}`,
@@ -367,6 +389,31 @@ AT.describeShopList = function (cfg) {
   const n = cfg.items.filter((i) => i.enabled).length;
   const txt = `${n} ite${n === 1 ? "m" : "ns"}${cfg.reserve ? `, reserva ${cfg.reserve}` : ""}`;
   return cfg.enabled ? `ligado, ${txt}` : n ? `desligado, ${txt}` : "desligado";
+};
+
+// ---------------------------------------------------------------------------
+// Aprimoramento automatico
+// ---------------------------------------------------------------------------
+AT.UPGRADE_CATEGORIES = ["rods", "backpacks", "hooks"];
+AT.UPGRADE_LABELS = { rods: "Vara", backpacks: "Mochila", hooks: "Anzol" };
+AT.UPGRADE_WHEN = ["anytime", "discount"];
+AT.UPGRADE_WHEN_LABELS = { anytime: "Assim que tiver dinheiro", discount: "Só durante o Desconto na Loja" };
+AT.sanitizeAutoUpgrade = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  const order = [];
+  for (const c of Array.isArray(o.order) ? o.order : []) if (AT.UPGRADE_CATEGORIES.includes(c) && !order.includes(c)) order.push(c);
+  for (const c of AT.UPGRADE_CATEGORIES) if (!order.includes(c)) order.push(c);
+  const categories = {};
+  for (const c of AT.UPGRADE_CATEGORIES) categories[c] = !(o.categories && o.categories[c] === false);
+  return { enabled: !!o.enabled, when: AT.UPGRADE_WHEN.includes(o.when) ? o.when : "anytime", order, categories };
+};
+AT.effectiveAutoUpgrade = function (s, g) {
+  return AT.sanitizeAutoUpgrade((s && s.autoUpgrade) || (g || AT.DEFAULT_GENERAL_SETTINGS).autoUpgrade);
+};
+AT.describeAutoUpgrade = function (c) {
+  if (!c.enabled) return "desligado";
+  const cats = c.order.filter((x) => c.categories[x]).map((x) => AT.UPGRADE_LABELS[x]);
+  return cats.length ? `ligado: ${cats.join(" → ")}, ${c.when === "discount" ? "só no desconto" : "assim que der"}` : "ligado, nenhuma categoria";
 };
 
 // Preco com desconto, igual ao site: arredonda o meio para o par.
@@ -534,6 +581,7 @@ AT.mergeGeneral = function (saved) {
     turboSell: AT.sanitizeTurboSell(g.turboSell),
     invDump: AT.sanitizeInvDump(g.invDump),
     autoBoard: AT.sanitizeAutoBoard(g.autoBoard),
+    autoUpgrade: AT.sanitizeAutoUpgrade(g.autoUpgrade),
     protection: AT.sanitizeProtection(g.protection),
     shopList: AT.sanitizeShopList(g.shopList),
     eventKit: AT.sanitizeEventKit(g.eventKit),
@@ -555,6 +603,7 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   turboSell: null, // idem
   invDump: null, // idem
   autoBoard: null, // idem
+  autoUpgrade: null, // idem
   protection: null, // idem
   shopList: null, // idem
   eventKit: null, // idem

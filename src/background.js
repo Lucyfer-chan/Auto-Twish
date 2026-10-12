@@ -819,7 +819,8 @@ async function applyChannelSettings(channel, patch) {
       ["tournament", AT.effectiveTournament, (a, b) => AT.sanitizeTournament({ ...a, ...b })],
       ["duelBait", AT.effectiveDuelBait, (a, b) => AT.sanitizeDuelBait({ ...a, ...b })],
       ["invDump", AT.effectiveInvDump, (a, b) => AT.sanitizeInvDump({ ...a, ...b })],
-      ["autoBoard", AT.effectiveAutoBoard, (a, b) => mergeAutoBoard(a, b)]
+      ["autoBoard", AT.effectiveAutoBoard, (a, b) => mergeAutoBoard(a, b)],
+      ["autoUpgrade", AT.effectiveAutoUpgrade, (a, b) => mergeAutoUpgrade(a, b)]
     ]) {
       if (key in patch) s[key] = patch[key] === null ? null : merge(eff(previous, stateCache && stateCache.general), patch[key]);
     }
@@ -875,6 +876,7 @@ async function applyChannelSettings(channel, patch) {
   if ("notifyEvents" in patch && settings.notifyEvents) refreshEvents(channel, false); // estado inicial, sem notificar o que ja estava rolando
   if ("turboSell" in patch) await reevaluateTurboSell(channel);
   if ("invDump" in patch && typeof onInvDumpSettingsChanged === "function") onInvDumpSettingsChanged(channel);
+  if (("autoUpgrade" in patch || "shopList" in patch) && typeof onUpgradeSettingsChanged === "function") onUpgradeSettingsChanged(channel);
   if ("protection" in patch) onProtectionSettingsChanged(channel);
   if ("shopList" in patch) await reevaluateShopping(channel);
   if (["eventKit", "tournament", "duelBait"].some((k) => k in patch) && typeof onKitSettingsChanged === "function") onKitSettingsChanged(channel);
@@ -906,6 +908,12 @@ async function reevaluateTurboSell(only) {
 }
 
 // Mescla parcial da configuracao de eventos (por evento).
+function mergeAutoUpgrade(cur, patch) {
+  const base = AT.sanitizeAutoUpgrade(cur);
+  const p = patch || {};
+  return AT.sanitizeAutoUpgrade({ ...base, ...p, categories: { ...base.categories, ...(p.categories || {}) } });
+}
+
 function mergeAutoBoard(cur, patch) {
   const base = AT.sanitizeAutoBoard(cur);
   const p = patch || {};
@@ -1146,6 +1154,7 @@ async function refreshEvents(channel, notify) {
   await scheduleTurboSell(channel, ev);
   if (typeof scheduleShopping === "function") await scheduleShopping(channel, ev);
   if (typeof onKitEvents === "function") await onKitEvents(channel, ev);
+  if (typeof onUpgradeEvents === "function") await onUpgradeEvents(channel, ev);
   return ev;
 }
 
@@ -1161,6 +1170,7 @@ function watchesEvents(s, general) {
     s.enabled ||
     AT.effectiveTurboSell(s, general).enabled ||
     (shop.enabled && shop.items.length) ||
+    AT.effectiveAutoUpgrade(s, general).enabled ||
     AT.KIT_EVENTS.some((k) => AT.kitIsActive(kit[k]))
   );
 }
@@ -1371,13 +1381,41 @@ async function runTurboSell(channel) {
   }
 }
 
+// Configuracao de duelo do canal (o streamer escolhe o CD pos-duelo):
+// GET /api/{canal}/settings -> values.duel_cooldown_seconds, duels_enabled.
+// Guardada em gameState[canal].duelSettings por algumas horas. Sem leitura
+// (o site so mostra os valores em alguns canais), fica o padrao de 30 min.
+const DUEL_SETTINGS_TTL_MS = 6 * 60 * 60 * 1000;
+async function readDuelSettings(channel, { fresh = false } = {}) {
+  const { gameState } = await browser.storage.local.get("gameState");
+  const cur = ((gameState || {})[channel] || {}).duelSettings;
+  if (!fresh && cur && Date.now() - (cur.fetchedAt || 0) < DUEL_SETTINGS_TTL_MS) return cur;
+  const r = await twishApi(`/api/${encodeURIComponent(channel)}/settings`);
+  const v = r.ok && r.data && r.data.values && typeof r.data.values === "object" ? r.data.values : null;
+  const secs = v ? Number(v.duel_cooldown_seconds) : NaN;
+  const next = {
+    cooldownSec: Number.isFinite(secs) && secs > 0 ? Math.round(secs) : null, // null = padrao
+    enabled: v && typeof v.duels_enabled === "boolean" ? v.duels_enabled : null,
+    fetchedAt: Date.now()
+  };
+  await mutateGameState(channel, (st) => {
+    st.duelSettings = next;
+  });
+  return next;
+}
+function duelCooldownMs(ds) {
+  return ds && ds.cooldownSec ? ds.cooldownSec * 1000 : AT.DUEL_COOLDOWN_MS;
+}
+
 async function onDuelEnd(channel, mentions) {
   const general = await getGeneralSettings();
   const me = general.twishLogin;
   if (!me || !mentions.some((m) => m.toLowerCase() === me)) return; // duelo de outras pessoas
-  const until = Date.now() + AT.DUEL_COOLDOWN_MS;
+  const ds = await readDuelSettings(channel).catch(() => null);
+  const until = Date.now() + duelCooldownMs(ds);
   await mutateGameState(channel, (st) => {
     st.duelCooldownUntil = until;
+    st.duelEndedAt = Date.now();
     delete st.duelInvite;
   });
   try {
@@ -1456,6 +1494,8 @@ async function processChannelIfDue(channel, source) {
     if (result.ok && AT.followsTwish(settings.mode)) schedulePostSendCheck(channel);
     if (result.ok && typeof scheduleInvDump === "function") scheduleInvDump(channel);
     if (result.ok && typeof noteFishForBoarding === "function") noteFishForBoarding(channel);
+    if (result.ok && typeof scheduleProtectAfterCatch === "function") scheduleProtectAfterCatch(channel);
+    if (result.ok && typeof scheduleUpgrade === "function") scheduleUpgrade(channel);
 
     if (!result.ok) {
       console.warn(`${AT.LOG_PREFIX} (${source}) Falha ao enviar para "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
@@ -1852,6 +1892,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (patch.turboSell) g.turboSell = AT.sanitizeTurboSell({ ...g.turboSell, ...patch.turboSell });
         if (patch.invDump) g.invDump = AT.sanitizeInvDump({ ...g.invDump, ...patch.invDump });
         if (patch.autoBoard) g.autoBoard = mergeAutoBoard(g.autoBoard, patch.autoBoard);
+        if (patch.autoUpgrade) g.autoUpgrade = mergeAutoUpgrade(g.autoUpgrade, patch.autoUpgrade);
         if (patch.protection) g.protection = AT.sanitizeProtection({ ...g.protection, ...patch.protection });
         if (patch.shopList) g.shopList = AT.sanitizeShopList({ ...g.shopList, ...patch.shopList });
         if (patch.eventKit) g.eventKit = mergeEventKit(g.eventKit, patch.eventKit);
@@ -1865,6 +1906,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
       if (patch.turboSell) await reevaluateTurboSell();
       if (patch.invDump && typeof onInvDumpSettingsChanged === "function") onInvDumpSettingsChanged(null);
+      if ((patch.autoUpgrade || (patch.shopList && "reserve" in patch.shopList)) && typeof onUpgradeSettingsChanged === "function") onUpgradeSettingsChanged(null);
       if (patch.protection) onProtectionSettingsChanged(null);
       if (patch.shopList) await reevaluateShopping(null);
       if ((patch.eventKit || patch.tournament || patch.duelBait) && typeof onKitSettingsChanged === "function") onKitSettingsChanged(null);
@@ -1927,6 +1969,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "GET_GAME_STATE") {
     (async () => {
       await refreshEvents(msg.channel, false);
+      await readDuelSettings(msg.channel).catch(() => null); // CD pos-duelo do canal (em cache)
       const { gameState } = await browser.storage.local.get("gameState");
       sendResponse({ state: (gameState || {})[msg.channel] || {} });
     })();
@@ -1951,6 +1994,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       recordUserSent(channel);
       if (typeof scheduleInvDump === "function") scheduleInvDump(channel);
       if (typeof noteFishForBoarding === "function") noteFishForBoarding(channel);
+      if (typeof scheduleProtectAfterCatch === "function") scheduleProtectAfterCatch(channel);
+      if (typeof scheduleUpgrade === "function") scheduleUpgrade(channel);
     }
     else if (channel && typeof msg.text === "string" && msg.text.startsWith("$")) onUserOtherCommand(channel, msg.text);
     return false;
@@ -1973,6 +2018,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       await recordSendResult(msg.channel, result.ok); // so reagenda se o canal estiver ativado
       if (result.ok && typeof scheduleInvDump === "function") scheduleInvDump(msg.channel);
       if (result.ok && typeof noteFishForBoarding === "function") noteFishForBoarding(msg.channel);
+      if (result.ok && typeof scheduleProtectAfterCatch === "function") scheduleProtectAfterCatch(msg.channel);
+      if (result.ok && typeof scheduleUpgrade === "function") scheduleUpgrade(msg.channel);
       sendResponse({ ok: result.ok, reason: result.reason, settings: await getChannelSettings(msg.channel) });
     })();
     return true;
@@ -1981,7 +2028,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|invdump-auto|board-auto|event):([^:]+)/.exec(id);
+    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|invdump-auto|board-auto|upgrade-auto|event):([^:]+)/.exec(id);
     if (!m) return;
     const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);

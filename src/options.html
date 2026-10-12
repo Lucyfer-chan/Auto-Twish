@@ -509,13 +509,14 @@
     <div id="generalBoard" class="setting"></div>
     <div id="generalProtect" class="setting"></div>
     <div id="generalShop" class="setting"></div>
+    <div id="generalUpgrade" class="setting"></div>
     <div id="generalKit" class="setting"></div>
     <div id="generalTourney" class="setting"></div>
     <div id="generalDuelBait" class="setting"></div>
     <div class="setting">
       <label class="check-row" style="margin-top:0">
         <input type="checkbox" id="notifyAutomations" />
-        <span>Avisar quando uma automação agir (duelo aceito, venda feita, Inv Dump, embarque)</span>
+        <span>Avisar quando uma automação agir (duelo aceito, venda feita, Inv Dump, embarque, aprimoramento)</span>
       </label>
     </div>
   </section>
@@ -677,6 +678,11 @@
       </label>
       <div class="auto-override js-board-host"></div>
       <label class="check-row">
+        <input type="checkbox" class="js-upgrade-default" />
+        <span>Aprimoramento automático: usar o padrão geral <span class="hint">(<span class="js-upgrade-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-upgrade-host"></div>
+      <label class="check-row">
         <input type="checkbox" class="js-protect-default" />
         <span>Proteção: usar o padrão geral <span class="hint">(<span class="js-protect-summary"></span>)</span></span>
       </label>
@@ -785,6 +791,12 @@
       </span>
     </label>
     <div class="js-protect-fields" style="margin-left:26px">
+      <div class="acq-field" style="max-width:320px;margin:4px 0 10px">
+        <label>Proteger também por raridade</label>
+        <select class="js-protect-tier"></select>
+        <div class="field-hint">as espécies que você tem dessa raridade em diante, e as que forem chegando (confere depois de cada pesca)</div>
+      </div>
+      <div class="field-label" style="margin-top:4px">Espécies específicas</div>
       <div class="chips js-protect-chips"></div>
       <div class="add-row">
         <div class="acq-field">

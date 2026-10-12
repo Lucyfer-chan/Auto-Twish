@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Auto Twish",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Automatiza a pesca no Twish ($pescar no chat da Twitch), sincronizando com o cooldown real do site twish.com.br.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -30,7 +30,8 @@
       "shop.js",
       "kit.js",
       "invdump.js",
-      "board.js"
+      "board.js",
+      "upgrade.js"
     ]
   },
   "content_scripts": [

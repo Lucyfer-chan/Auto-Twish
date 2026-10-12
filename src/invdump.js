@@ -57,7 +57,10 @@ async function runInvDump(channel, source) {
         return;
       }
       const whitelist = new Set((me.data.whitelisted_fish_ids || []).map((x) => String(x).toLowerCase()));
-      const plan = AT.planInvDump(r.data, { whitelist, keepFromTier: cfg.keepFromTier });
+      // A raridade protegida pela Protecao tambem nunca e vendida.
+      const prot = AT.effectiveProtection((await getAllChannelSettings())[channel] || null, await getGeneralSettings());
+      const keep = AT.minTier(cfg.keepFromTier, prot.enabled ? prot.fromTier : null);
+      const plan = AT.planInvDump(r.data, { whitelist, keepFromTier: keep });
       const blocked = plan.blocked.length ? ` Cheia(s) sem o que vender (protegida ou acima do limite): ${plan.blocked.join(", ")}.` : "";
 
       if (!plan.sells.length) {

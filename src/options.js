@@ -122,8 +122,12 @@ function mountProtectEditor(host, save) {
   const input = q(".js-protect-input");
   const add = q(".js-protect-add");
   const error = q(".js-protect-error");
+  const tier = q(".js-protect-tier");
+  tier.append(h("option", { value: "", text: "— não (só as espécies da lista) —" }));
+  for (const t of AT.PROTECT_TIERS) tier.append(h("option", { value: t, text: `${AT.TIER_LABELS[t]} em diante` }));
   let cfg = AT.sanitizeProtection(null);
   enabled.addEventListener("change", () => save({ enabled: enabled.checked }));
+  tier.addEventListener("change", () => save({ fromTier: tier.value || null }));
   function addFish() {
     const f = resolveFish(input.value);
     if (!f) {
@@ -148,6 +152,7 @@ function mountProtectEditor(host, save) {
   return function render(next) {
     cfg = AT.sanitizeProtection(next);
     enabled.checked = cfg.enabled;
+    if (document.activeElement !== tier) tier.value = cfg.fromTier || "";
     chips.innerHTML = "";
     if (!cfg.fish.length) {
       const e = document.createElement("span");
@@ -510,6 +515,71 @@ function mountKitEditor(host, save) {
   };
 }
 
+// saveReserve(v) grava a reserva da Lista de Compras (a mesma usada aqui).
+function mountUpgradeEditor(host, save, saveReserve) {
+  const on = checkRow(
+    h("span", {}, h("strong", { text: "Aprimoramento automático" }), " ", h("span", { class: "hint", text: "($comprar)" })),
+    "Compra o próximo nível de vara, mochila e anzol (cada um exige o anterior), na ordem abaixo. Se as moedas não derem para um, passa para o próximo. Nunca deixa o saldo abaixo da reserva. Saldo e itens são de cada barco; confere depois de cada pesca, a cada 10 min e no início de um Desconto na Loja."
+  );
+  on.row.style.marginTop = "0";
+  const when = h("select");
+  for (const w of AT.UPGRADE_WHEN) when.append(h("option", { value: w, text: AT.UPGRADE_WHEN_LABELS[w] }));
+  const reserve = h("input", { type: "text", inputmode: "numeric", autocomplete: "off" });
+  const list = h("div", { class: "upgrade-list" });
+  const fields = h(
+    "div",
+    { style: "margin-left:26px" },
+    h("div", { class: "auto-fields" },
+      h("div", { class: "acq-field" }, h("label", { text: "Quando comprar" }), when),
+      h("div", { class: "acq-field" }, h("label", { text: "Reserva de moedas" }), reserve, h("div", { class: "field-hint", text: "a mesma da Lista de Compras (mudar aqui muda lá)" }))
+    ),
+    h("div", { class: "field-label", style: "margin-top:10px", text: "Categorias, em ordem de prioridade" }),
+    list
+  );
+  host.append(on.row, fields);
+  let cfg = AT.sanitizeAutoUpgrade(null);
+  on.cb.addEventListener("change", () => save({ enabled: on.cb.checked }));
+  when.addEventListener("change", () => save({ when: when.value }));
+  reserve.addEventListener("change", () => {
+    const v = AT.clampInt(reserve.value, 0, 10000000, null);
+    if (v !== null) saveReserve(v);
+  });
+  function move(i, d) {
+    const o = [...cfg.order];
+    const j = i + d;
+    if (j < 0 || j >= o.length) return;
+    [o[i], o[j]] = [o[j], o[i]];
+    save({ order: o });
+  }
+  return function render(next, reserveValue) {
+    cfg = AT.sanitizeAutoUpgrade(next);
+    on.cb.checked = cfg.enabled;
+    fields.hidden = !cfg.enabled;
+    if (document.activeElement !== when) when.value = cfg.when;
+    if (document.activeElement !== reserve) reserve.value = reserveValue ?? 0;
+    list.innerHTML = "";
+    cfg.order.forEach((c, i) => {
+      const row = h("div", { class: "shop-item" + (cfg.categories[c] ? "" : " off") });
+      const cb = h("input", { type: "checkbox" });
+      cb.checked = cfg.categories[c];
+      cb.addEventListener("change", () => save({ categories: { [c]: cb.checked } }));
+      const mk = (label, title, fn, disabled) => {
+        const b = h("button", { type: "button", class: "btn secondary small", title, "aria-label": title }, label);
+        b.disabled = !!disabled;
+        b.addEventListener("click", fn);
+        return b;
+      };
+      row.append(
+        h("span", { class: "shop-prio", text: `${i + 1}.` }),
+        h("label", { class: "acq-active", style: "flex:1" }, cb, ` ${AT.UPGRADE_LABELS[c]}`),
+        mk("↑", "Subir (mais prioridade)", () => move(i, -1), i === 0),
+        mk("↓", "Descer (menos prioridade)", () => move(i, 1), i === cfg.order.length - 1)
+      );
+      list.append(row);
+    });
+  };
+}
+
 function mountBoardEditor(host, save) {
   const on = checkRow(
     h("span", {}, h("strong", { text: "Embarque automático nas expedições" })),
@@ -654,6 +724,11 @@ const renderGeneralDuel = mountDuelEditor($("generalDuel"), (patch) => updateGen
 const renderGeneralSell = mountSellEditor($("generalSell"), (patch) => updateGeneral({ turboSell: patch }));
 const renderGeneralInvDump = mountInvDumpEditor($("generalInvDump"), (patch) => updateGeneral({ invDump: patch }));
 const renderGeneralBoard = mountBoardEditor($("generalBoard"), (patch) => updateGeneral({ autoBoard: patch }));
+const renderGeneralUpgrade = mountUpgradeEditor(
+  $("generalUpgrade"),
+  (patch) => updateGeneral({ autoUpgrade: patch }),
+  (v) => updateGeneral({ shopList: { reserve: v } })
+);
 const renderGeneralProtect = mountProtectEditor($("generalProtect"), (patch) => updateGeneral({ protection: patch }));
 const renderGeneralShop = mountShopEditor($("generalShop"), (patch) => updateGeneral({ shopList: patch }));
 const renderGeneralKit = mountKitEditor($("generalKit"), (patch) => updateGeneral({ eventKit: patch }));
@@ -682,6 +757,7 @@ function renderGeneral() {
   renderGeneralSell(g.turboSell);
   renderGeneralInvDump(g.invDump);
   renderGeneralBoard(g.autoBoard);
+  renderGeneralUpgrade(g.autoUpgrade, AT.sanitizeShopList(g.shopList).reserve);
   renderGeneralProtect(g.protection);
   renderGeneralShop(g.shopList);
   renderGeneralKit(g.eventKit);
@@ -781,6 +857,16 @@ function createCard(name) {
     els[`${cls}Render`] = mount(hostEl, (patch) => updateChannel(name, { [key]: patch }));
     def.addEventListener("change", () => updateChannel(name, { [key]: def.checked ? null : {} }));
   }
+  // Aprimoramento: a reserva e a da Lista de Compras deste canal (excecao) ou a geral.
+  els.upgradeDefault = q(".js-upgrade-default");
+  els.upgradeSummary = q(".js-upgrade-summary");
+  els.upgradeHost = q(".js-upgrade-host");
+  els.upgradeRender = mountUpgradeEditor(
+    els.upgradeHost,
+    (patch) => updateChannel(name, { autoUpgrade: patch }),
+    (v) => ((state.channels[name] || {}).shopList ? updateChannel(name, { shopList: { reserve: v } }) : updateGeneral({ shopList: { reserve: v } }))
+  );
+  els.upgradeDefault.addEventListener("change", () => updateChannel(name, { autoUpgrade: els.upgradeDefault.checked ? null : {} }));
   els.kitStatusRow = q(".js-kit-status-row");
   els.kitStatus = q(".js-kit-status");
   els.renderProtect = mountProtectEditor(els.protectHost, (patch) => updateChannel(name, { protection: patch }));
@@ -907,6 +993,10 @@ function renderCard(name) {
     els[`${cls}Host`].hidden = !s[key];
     if (s[key]) els[`${cls}Render`](s[key]);
   }
+  els.upgradeDefault.checked = !s.autoUpgrade;
+  els.upgradeSummary.textContent = AT.describeAutoUpgrade(AT.sanitizeAutoUpgrade(g.autoUpgrade));
+  els.upgradeHost.hidden = !s.autoUpgrade;
+  if (s.autoUpgrade) els.upgradeRender(s.autoUpgrade, AT.effectiveShopList(s, g).reserve);
   els.shopDefault.checked = !s.shopList;
   els.shopSummary.textContent = AT.describeShopList(AT.sanitizeShopList(g.shopList));
   els.shopHost.hidden = !s.shopList;
@@ -949,7 +1039,7 @@ function renderProtectStatus(name) {
   const s = state.channels[name];
   if (!card || !s) return;
   const cfg = AT.effectiveProtection(s, state.general);
-  const active = cfg.enabled && cfg.fish.length > 0;
+  const active = AT.protectionActive(cfg);
   card.els.protectStatusRow.hidden = !active;
   if (!active) return;
   const w = (gameState[name] || {}).whitelist;
