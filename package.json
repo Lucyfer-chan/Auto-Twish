@@ -1,0 +1,15 @@
+{
+  "name": "auto-twish",
+  "private": true,
+  "description": "Extensão para Firefox e Chrome que automatiza o Twish (jogo de pesca do chat da Twitch).",
+  "license": "CC0-1.0",
+  "scripts": {
+    "build": "python3 tools/build.py",
+    "lint": "web-ext lint -s src",
+    "test:unit": "node tests/unit_invdump.js && node tests/unit_sorte_rara.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0",
+    "web-ext": "^8.10.0"
+  }
+}

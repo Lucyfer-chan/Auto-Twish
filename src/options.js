@@ -591,11 +591,19 @@ function mountBoardEditor(host, save) {
   for (const id of AT.EXPEDITION_SEA_IDS) {
     const sea = checkRow(AT.EXPEDITION_SEAS[id]);
     const buy = id === "fenda" ? null : checkRow("comprar o ticket se não tiver ($comprar)");
-    const box = h("div", { class: "kit-tier" }, sea.row, buy ? h("div", { class: "kit-sub" }, buy.row) : h("div", { class: "kit-sub hint", text: "entrada: 3 Fragmentos do Fim (não se compram)" }));
+    const insure = AT.EXPEDITION_INSURANCE[id] ? checkRow("comprar o seguro antes de zarpar ($comprar)", "o mar não leva moedas nem peixe nesta viagem; usa o do inventário se já tiver") : null;
+    const box = h(
+      "div",
+      { class: "kit-tier" },
+      sea.row,
+      buy ? h("div", { class: "kit-sub" }, buy.row) : h("div", { class: "kit-sub hint", text: "entrada: 3 Fragmentos do Fim (não se compram)" }),
+      insure ? h("div", { class: "kit-sub" }, insure.row) : null
+    );
     list.append(box);
     sea.cb.addEventListener("change", () => save({ seas: { [id]: { enabled: sea.cb.checked } } }));
     if (buy) buy.cb.addEventListener("change", () => save({ seas: { [id]: { buy: buy.cb.checked } } }));
-    seaRows[id] = { sea, buy };
+    if (insure) insure.cb.addEventListener("change", () => save({ seas: { [id]: { insure: insure.cb.checked } } }));
+    seaRows[id] = { sea, buy, insure };
   }
   host.append(on.row, list);
   on.cb.addEventListener("change", () => save({ enabled: on.cb.checked }));
@@ -610,7 +618,49 @@ function mountBoardEditor(host, save) {
         r.buy.cb.checked = c.seas[id].buy;
         r.buy.row.hidden = !c.seas[id].enabled;
       }
+      if (r.insure) {
+        r.insure.cb.checked = c.seas[id].insure;
+        r.insure.row.hidden = !c.seas[id].enabled;
+      }
     }
+  };
+}
+
+function mountRemedyEditor(host, save) {
+  const on = checkRow(
+    h("span", {}, h("strong", { text: "Remédios automáticos" })),
+    "Se o barco estiver com Canto da Sereia ou Maldição (efeitos que a expedição pode trazer), usa o remédio do inventário — Alga medicinal ou Água benta — pelo site (o mesmo \"usar\" dos itens). Confere depois de cada pesca, a cada 10 min e quando uma expedição termina."
+  );
+  on.row.style.marginTop = "0";
+  const siren = checkRow("Curar Canto da Sereia (Alga medicinal)");
+  const curse = checkRow("Curar Maldição (Água benta)");
+  const buy = checkRow("comprar o remédio se não tiver ($comprar)");
+  const fields = h("div", { style: "margin-left:26px" }, siren.row, curse.row, buy.row);
+  host.append(on.row, fields);
+  on.cb.addEventListener("change", () => save({ enabled: on.cb.checked }));
+  siren.cb.addEventListener("change", () => save({ siren: siren.cb.checked }));
+  curse.cb.addEventListener("change", () => save({ curse: curse.cb.checked }));
+  buy.cb.addEventListener("change", () => save({ buy: buy.cb.checked }));
+  return function render(next) {
+    const c = AT.sanitizeAutoRemedy(next);
+    on.cb.checked = c.enabled;
+    fields.hidden = !c.enabled;
+    siren.cb.checked = c.siren;
+    curse.cb.checked = c.curse;
+    buy.cb.checked = c.buy;
+  };
+}
+
+function mountFeaturedEditor(host, save) {
+  const on = checkRow(
+    h("span", {}, h("strong", { text: "Destaque automático" }), " ", h("span", { class: "hint", text: "($destaque)" })),
+    "Em canal ativado, pede o peixe em destaque uma vez por dia, se a extensão ainda não leu o do dia. O dia do jogo vira às 00:30 (o destaque troca à meia-noite)."
+  );
+  on.row.style.marginTop = "0";
+  host.append(on.row);
+  on.cb.addEventListener("change", () => save({ enabled: on.cb.checked }));
+  return function render(next) {
+    on.cb.checked = AT.sanitizeAutoFeatured(next).enabled;
   };
 }
 
@@ -724,6 +774,8 @@ const renderGeneralDuel = mountDuelEditor($("generalDuel"), (patch) => updateGen
 const renderGeneralSell = mountSellEditor($("generalSell"), (patch) => updateGeneral({ turboSell: patch }));
 const renderGeneralInvDump = mountInvDumpEditor($("generalInvDump"), (patch) => updateGeneral({ invDump: patch }));
 const renderGeneralBoard = mountBoardEditor($("generalBoard"), (patch) => updateGeneral({ autoBoard: patch }));
+const renderGeneralRemedy = mountRemedyEditor($("generalRemedy"), (patch) => updateGeneral({ autoRemedy: patch }));
+const renderGeneralFeatured = mountFeaturedEditor($("generalFeatured"), (patch) => updateGeneral({ autoFeatured: patch }));
 const renderGeneralUpgrade = mountUpgradeEditor(
   $("generalUpgrade"),
   (patch) => updateGeneral({ autoUpgrade: patch }),
@@ -757,6 +809,8 @@ function renderGeneral() {
   renderGeneralSell(g.turboSell);
   renderGeneralInvDump(g.invDump);
   renderGeneralBoard(g.autoBoard);
+  renderGeneralRemedy(g.autoRemedy);
+  renderGeneralFeatured(g.autoFeatured);
   renderGeneralUpgrade(g.autoUpgrade, AT.sanitizeShopList(g.shopList).reserve);
   renderGeneralProtect(g.protection);
   renderGeneralShop(g.shopList);
@@ -772,6 +826,59 @@ async function updateGeneral(patch) {
   renderGeneral();
   for (const name of cards.keys()) renderCard(name);
 }
+
+// ---------------------------------------------------------------------------
+// Backup
+// ---------------------------------------------------------------------------
+$("exportBtn").addEventListener("click", async () => {
+  const st = $("backupStatus");
+  const r = await browser.runtime.sendMessage({ type: "EXPORT_SETTINGS" });
+  if (!r || !r.ok) {
+    st.textContent = `Falha ao exportar (${(r && r.error) || "?"}).`;
+    return;
+  }
+  const blob = new Blob([JSON.stringify(r.data, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  a.href = URL.createObjectURL(blob);
+  a.download = `Auto Twish backup ${p(d.getDate())}-${p(d.getMonth() + 1)}-${String(d.getFullYear()).slice(2)} ${p(d.getHours())}-${p(d.getMinutes())}.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  st.textContent = `Exportado: ${Object.keys(r.data.channels).length} canal(is), ${r.data.acquisitionList.length} item(ns) do Mercado.`;
+});
+$("importBtn").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", async () => {
+  const st = $("backupStatus");
+  const file = $("importFile").files[0];
+  $("importFile").value = "";
+  if (!file) return;
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch (e) {
+    st.textContent = "Esse arquivo não é um JSON válido.";
+    return;
+  }
+  if (!data || data.app !== AT.BACKUP_APP) {
+    st.textContent = "Esse arquivo não é um backup do Auto Twish.";
+    return;
+  }
+  const nCh = Object.keys(data.channels || {}).length;
+  if (!confirm(`Importar o backup de ${data.exportedAt ? new Date(data.exportedAt).toLocaleString("pt-BR") : "?"} (v ${data.version || "?"})?\n\nAs configurações gerais e ${nCh} canal(is) serão substituídos.`)) {
+    st.textContent = "Importação cancelada.";
+    return;
+  }
+  const r = await browser.runtime.sendMessage({ type: "IMPORT_SETTINGS", data });
+  if (!r || !r.ok) {
+    st.textContent = `Não importei: ${(r && r.error) || "erro"}.`;
+    return;
+  }
+  st.textContent = `Importado: ${r.channels} canal(is), ${r.acquisition} item(ns) do Mercado.`;
+  setTimeout(() => location.reload(), 1200);
+});
 
 defaultJitterEl.addEventListener("input", () => {
   defaultJitterValueEl.textContent = `${defaultJitterEl.value}s`;
@@ -814,6 +921,7 @@ function createCard(name) {
     rodField: q(".js-rod-field"),
     rod: q(".js-rod"),
     notifyEvents: q(".js-notify-events"),
+    notifyBig: q(".js-notify-big"),
     jitterDefault: q(".js-jitter-default"),
     defaultValue: q(".js-default-value"),
     jitterRow: q(".js-jitter-row"),
@@ -847,7 +955,9 @@ function createCard(name) {
     ["tournament", "tourney", mountTourneyEditor],
     ["duelBait", "duelbait", mountDuelBaitEditor],
     ["invDump", "invdump", mountInvDumpEditor],
-    ["autoBoard", "board", mountBoardEditor]
+    ["autoBoard", "board", mountBoardEditor],
+    ["autoRemedy", "remedy", mountRemedyEditor],
+    ["autoFeatured", "featured", mountFeaturedEditor]
   ]) {
     const def = q(`.js-${cls}-default`);
     const hostEl = q(`.js-${cls}-host`);
@@ -902,6 +1012,7 @@ function createCard(name) {
   }
   els.rod.addEventListener("change", () => updateChannel(name, { rod: els.rod.value }));
   els.notifyEvents.addEventListener("change", () => updateChannel(name, { notifyEvents: els.notifyEvents.checked }));
+  els.notifyBig.addEventListener("change", () => updateChannel(name, { notifyBigEvents: els.notifyBig.checked }));
 
   els.jitterDefault.addEventListener("change", () => {
     // Desmarcar cria uma excecao comecando no valor padrao atual.
@@ -958,6 +1069,7 @@ function renderCard(name) {
   if (document.activeElement !== els.rod) els.rod.value = s.rod || AT.DEFAULT_ROD;
 
   els.notifyEvents.checked = !!s.notifyEvents;
+  els.notifyBig.checked = AT.notifiesBigEvents(s);
 
   const usesDefault = s.maxJitterSeconds === null || s.maxJitterSeconds === undefined;
   els.jitterDefault.checked = usesDefault;
@@ -986,7 +1098,9 @@ function renderCard(name) {
     ["tournament", "tourney", AT.describeTournament, AT.sanitizeTournament],
     ["duelBait", "duelbait", AT.describeDuelBait, AT.sanitizeDuelBait],
     ["invDump", "invdump", AT.describeInvDump, AT.sanitizeInvDump],
-    ["autoBoard", "board", AT.describeAutoBoard, AT.sanitizeAutoBoard]
+    ["autoBoard", "board", AT.describeAutoBoard, AT.sanitizeAutoBoard],
+    ["autoRemedy", "remedy", AT.describeAutoRemedy, AT.sanitizeAutoRemedy],
+    ["autoFeatured", "featured", AT.describeAutoFeatured, AT.sanitizeAutoFeatured]
   ]) {
     els[`${cls}Default`].checked = !s[key];
     els[`${cls}Summary`].textContent = describe(sanitize(g[key]));

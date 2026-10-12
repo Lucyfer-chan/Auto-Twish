@@ -1,0 +1,17 @@
+const fs = require('fs'); const path = require('path'); eval(fs.readFileSync((process.argv[2] || path.join(__dirname, '..', 'src')) + '/shared.js', 'utf8') + ';global.AT=AT;');
+const kit = AT.sanitizeEventKit({ tier_catch_boost: { enabled: true, tiers: { rare: { enabled: true, baitId: 'isca_de_rio' }, mythic: { enabled: true, baitId: 'isca_milagrosa', turbo: true } } } });
+const ev = (extra) => ({ kind: 'tier_catch_boost', name: 'Sorte Rara', seconds_remaining: 500, ...extra });
+const p = (e) => { const r = AT.kitEntryForEvent(kit, e); return r ? `${r.tier} -> isca ${r.entry.baitId}${r.entry.turbo ? ' + Turbo' : ''}` : 'nada'; };
+console.log('tiers ["rare"]               :', p(ev({ tiers: ['rare'], tier_labels: ['Raro'] })));
+console.log('so tier_labels ["Mítico"]    :', p(ev({ tiers: [], tier_labels: ['Mítico'] })));
+console.log('so mensagem "peixe Raro"     :', p(ev({ message: '🍀 Sorte Rara! Chance de pescar peixe Raro em dobro' })));
+console.log('tiers objetos [{id:"mythic"}]:', p(ev({ tiers: [{ id: 'mythic' }] })));
+console.log('dois tiers rare+mythic       :', p(ev({ tiers: ['rare', 'mythic'] })));
+console.log('Lendario (sem regra)         :', p(ev({ tiers: ['legendary'] })));
+const off = AT.sanitizeEventKit({ ...kit, tier_catch_boost: { ...kit.tier_catch_boost, enabled: false } });
+console.log('Sorte Rara desligada         :', AT.kitEntryForEvent(off, ev({ tiers: ['rare'] })) ? 'ERRO' : 'nada');
+console.log('descricao                    :', AT.describeEventKit(kit));
+const old = AT.sanitizeEventKit({ tier_catch_boost: { enabled: true, baitId: 'isca_de_mar', sharpen: true } });
+console.log('config antiga migrada        :', AT.LUCK_TIERS.map((t) => `${t}:${old.tier_catch_boost.tiers[t].enabled ? old.tier_catch_boost.tiers[t].baitId : '-'}`).join(' '), '| ligada:', old.tier_catch_boost.enabled);
+console.log('XP em Dobro segue igual      :', JSON.stringify(AT.kitEntryForEvent(AT.sanitizeEventKit({ double_xp: { enabled: true, turbo: true } }), { kind: 'double_xp' })));
+console.log('invDump padrao               :', JSON.stringify(AT.mergeGeneral({}).invDump), '| sem limite:', JSON.stringify(AT.sanitizeInvDump({ enabled: true, keepFromTier: null })));

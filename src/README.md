@@ -1,4 +1,4 @@
-# Auto Twish — v 1.0.3
+# Auto Twish — v 1.0.4
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -97,15 +97,21 @@ O popup tem uma área "Jogo" com:
 
 - **Evento ativo** no canal (ex: "⚡ XP em Dobro — termina em 08:32"), lido
   da API pública do Twish. Em cada canal da página de configurações dá para
-  ligar "Notificar quando começar um evento neste canal" (desligado por
-  padrão). A consulta é 1x por minuto, só para canais ativados ou com aviso
-  de eventos ligado.
+  ligar "Notificar quando começar um evento neste canal" e, separado,
+  "Notificar quando começar um Grande Evento" (Invasão Pirata, Cthulhu…) —
+  desligados por padrão (quem já tinha o aviso de eventos ligado continua
+  recebendo os Grandes Eventos). A consulta é 1x por minuto, só para canais
+  ativados ou com algum aviso ligado.
 - **Peixe em destaque**: lido da resposta do TwishGameBot ao `$destaque` no
   chat (de quem quer que tenha pedido). O botão **Consultar** envia o
-  `$destaque` quando você clica.
+  `$destaque` quando você clica. **Destaque automático** (desligado por
+  padrão; geral + exceção por canal): em canal ativado, pede o `$destaque`
+  uma vez por dia se a extensão ainda não leu o do dia (tenta de novo 1x
+  depois de 10 min se a resposta não chegou). O dia do jogo vira às 00:30.
 - **Duelo**: convite pendente para você ("@fulano te desafiou — 04:12 pra
-  usar $aceitar") e, depois que um duelo seu termina, "Próximo duelo em
-  mm:ss" (30 min). A notificação de convite liga nas Configurações Gerais
+  usar $aceitar"), "Próximo duelo em mm:ss" depois que um duelo seu termina
+  (o CD pós-duelo que o streamer configurou; sem leitura, 30 min) ou
+  "Duelo: liberado". A notificação de convite liga nas Configurações Gerais
   (desligada por padrão). Para reconhecer convites para você, a extensão
   precisa ter lido sua conta pelo menos uma vez.
 
@@ -166,7 +172,19 @@ liberada pelo jogador.
   compram.
 - Não entra em sala aberta por você mesmo, nem com outra sala em andamento,
   vara fraca, torneio ou duelo (o site recusa; o motivo aparece no popup).
+- **Seguro** (Sereias e Abismo, opcional por mar): depois de entrar, compra o
+  seguro (`$comprar seguro_<mar>`) se não tiver no inventário do barco; ele é
+  gasto sozinho ao zarpar e o mar não leva moedas nem peixe naquela viagem.
 - Geral + exceção por canal. O popup mostra "⛵ Embarque" com o andamento.
+
+## Remédios automáticos (desligado por padrão)
+
+A expedição pode deixar o barco com **Canto da Sereia** ou **Maldição**. Com
+um deles ativo (lido em `/api/{canal}/me`), a extensão usa o remédio do
+inventário — **Alga medicinal** ou **Água benta** — pelo "usar" do site (a
+mesma exceção de ativar itens). Sem o remédio, compra pelo chat se "comprar se
+não tiver" estiver ligado. Confere depois de cada pesca, a cada 10 min e
+quando uma expedição termina. Geral + exceção por canal.
 
 ## Mercado — aquisição automática
 
@@ -274,6 +292,33 @@ Twitch precisa estar aberta.
 - Duelo e torneio: tempo mínimo de CD em minutos e segundos.
 - Aviso opcional quando uma automação agir.
 
+## Estatísticas e atividades
+
+Página própria (botão "📊 Estatísticas e atividades" no popup e nas
+configurações):
+
+- **Estatísticas por canal** — hoje, ontem, últimos 7 dias ou desde o início:
+  lances, pontos, XP, níveis, moedas, duelos e torneios vencidos (comparando as
+  leituras da sua conta, no máximo 1x por minuto por canal), saldo atual e
+  quantos `$pescar` a extensão e você enviaram. Abaixo, quantas ações cada
+  automação registrou no período.
+- **Atividades recentes** — as últimas 300 ações da extensão (compras, vendas,
+  proteção, embarques, remédios, eventos, travas…) com hora e canal, com
+  filtro por canal e tipo e botão para limpar.
+
+## Backup das configurações
+
+Em Configurações gerais → "Backup das configurações": **Exportar** salva um
+`.json` com as configurações gerais, as automações, os canais (com as exceções)
+e a lista do Mercado; **Importar** restaura — os canais do backup substituem os
+de mesmo nome e os outros ficam como estão. Útil antes de reinstalar a extensão.
+
+## Aviso de versão nova
+
+O popup avisa quando há uma versão mais nova nas tags do repositório do projeto
+no GitHub ([Lucyfer-chan/Auto-Twish](https://github.com/Lucyfer-chan/Auto-Twish),
+conferido ao abrir o navegador e a cada 6 h), com um link para a versão nova.
+
 ## Instalação — Firefox normal (permanente, assinada)
 
 O Firefox normal só instala de vez extensões assinadas pela Mozilla.
@@ -289,13 +334,17 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 1.0.3 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 1.0.4 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
    deixar permanente, o Firefox exige assinatura via addons.mozilla.org (dá
    para publicar como "unlisted" e instalar o `.xpi` assinado sem listar
    publicamente).
+4. Depois de reinstalar, o Firefox às vezes deixa desligado o acesso ao
+   twish.com.br (sintoma: a sincronização pela conta só funciona com uma aba do
+   Twish aberta). O popup avisa "🔑 Sem acesso ao twish.com.br" e o botão
+   **Conceder acesso** resolve com um clique.
 
 ## Como usar
 
@@ -356,6 +405,13 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 1.0.4** — Backup das configurações (exportar/importar), página de
+  estatísticas e atividades (com registro das últimas 300 ações), botão
+  "Conceder acesso ao twish.com.br" no popup, seguro antes de zarpar (Sereias e
+  Abismo), remédios automáticos (Canto da Sereia e Maldição), destaque
+  automático 1x por dia (o dia vira às 00:30), aviso separado para Grandes
+  Eventos e aviso de versão nova (tags do GitHub). Correção: o aviso de evento
+  novo podia se perder quando o popup consultava os eventos antes.
 - **v 1.0.3** — Proteção por raridade, Aprimoramento automático e contador de
   CD de duelo.
   - Contador de CD de duelo no popup (sempre visível no canal): convite

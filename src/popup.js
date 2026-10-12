@@ -360,6 +360,7 @@ async function loadExpedition() {
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.safety) renderSafety();
   if (area === "local" && changes.boarding) renderBoarding();
+  if (area === "local" && changes.update) renderUpdate();
   if (area === "local" && changes.expedition) {
     expedition = changes.expedition.newValue || null;
     renderExpedition();
@@ -405,6 +406,50 @@ const openOptions = () => {
   window.close();
 };
 $("openOptions").addEventListener("click", openOptions);
+$("openStats").addEventListener("click", () => {
+  browser.tabs.create({ url: browser.runtime.getURL("stats.html") });
+  window.close();
+});
+
+// Permissao de acesso ao twish.com.br (no Firefox pode voltar desligada depois de reinstalar).
+async function renderAccess() {
+  try {
+    const ok = await browser.permissions.contains({ origins: AT.TWISH_URL_PATTERNS });
+    $("accessLine").hidden = !!ok;
+  } catch (e) {}
+}
+$("grantAccess").addEventListener("click", async () => {
+  try {
+    const ok = await browser.permissions.request({ origins: AT.TWISH_URL_PATTERNS });
+    statusEl.textContent = ok ? "Acesso ao twish.com.br concedido." : "Acesso não concedido.";
+  } catch (e) {
+    statusEl.textContent = "Não foi possível pedir o acesso.";
+  }
+  renderAccess();
+});
+
+// Versao nova no GitHub (conferida pelo fundo da extensao).
+async function renderUpdate() {
+  try {
+    const { update } = await browser.storage.local.get("update");
+    const line = $("updateLine");
+    line.hidden = !(update && update.latest);
+    if (line.hidden) return;
+    line.textContent = "";
+    line.append("🆕 Versão nova disponível: ");
+    const strong = document.createElement("strong");
+    strong.textContent = `v ${update.latest}`;
+    line.append(strong, ` (você está na v ${browser.runtime.getManifest().version}) — `);
+    const a = document.createElement("a");
+    a.href = update.url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "ver no GitHub";
+    line.append(a);
+  } catch (e) {}
+}
+renderAccess();
+renderUpdate();
 $("gear").addEventListener("click", openOptions);
 
 async function getActiveTabUrl() {

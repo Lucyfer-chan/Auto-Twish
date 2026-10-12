@@ -74,6 +74,10 @@ AT.DEFAULT_GENERAL_SETTINGS = {
   // Embarque automatico nas expedicoes (sala anunciada no chat de um canal
   // ativado): entra e confirma pela API do site; pesca antes, se der.
   autoBoard: null, // preenchido por AT.sanitizeAutoBoard
+  // $destaque automatico: 1x por dia do jogo (vira as 00:30) em canal ativado.
+  autoFeatured: { enabled: false },
+  // Remedios: cura Canto da Sereia (Alga medicinal) e Maldicao (Agua benta).
+  autoRemedy: null, // preenchido por AT.sanitizeAutoRemedy
   // Protecao automatica (Road Map item 7): mantem estas especies na whitelist
   // do jogo ($whitelist) em cada barco. So adiciona; nunca remove.
   protection: {
@@ -416,6 +420,76 @@ AT.describeAutoUpgrade = function (c) {
   return cats.length ? `ligado: ${cats.join(" → ")}, ${c.when === "discount" ? "só no desconto" : "assim que der"}` : "ligado, nenhuma categoria";
 };
 
+// ---------------------------------------------------------------------------
+// Dia do jogo: o peixe em destaque troca a meia-noite; a extensao considera o
+// dia novo as 00:30 (folga para o jogo atualizar).
+// ---------------------------------------------------------------------------
+AT.GAME_DAY_OFFSET_MS = 30 * 60 * 1000;
+AT.gameDay = function (ts = Date.now()) {
+  const d = new Date(ts - AT.GAME_DAY_OFFSET_MS);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+AT.gameDayStart = function (ts = Date.now()) {
+  const d = new Date(ts - AT.GAME_DAY_OFFSET_MS);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime() + AT.GAME_DAY_OFFSET_MS;
+};
+
+// $destaque automatico
+AT.FEATURED_COMMAND = "$destaque";
+AT.sanitizeAutoFeatured = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  return { enabled: !!o.enabled };
+};
+AT.effectiveAutoFeatured = function (s, g) {
+  return AT.sanitizeAutoFeatured((s && s.autoFeatured) || (g || AT.DEFAULT_GENERAL_SETTINGS).autoFeatured);
+};
+AT.describeAutoFeatured = function (c) {
+  return c.enabled ? "ligado, 1x por dia" : "desligado";
+};
+
+// Remedios (efeitos ruins da expedicao, por barco)
+AT.REMEDIES = {
+  siren: { item: "alga_medicinal", name: "Alga medicinal", effect: "Canto da Sereia", field: "siren_remaining" },
+  curse: { item: "agua_benta", name: "Água benta", effect: "Maldição", field: "curse_remaining" }
+};
+AT.sanitizeAutoRemedy = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  return { enabled: !!o.enabled, siren: o.siren !== false, curse: o.curse !== false, buy: !!o.buy };
+};
+AT.effectiveAutoRemedy = function (s, g) {
+  return AT.sanitizeAutoRemedy((s && s.autoRemedy) || (g || AT.DEFAULT_GENERAL_SETTINGS).autoRemedy);
+};
+AT.describeAutoRemedy = function (c) {
+  if (!c.enabled) return "desligado";
+  const w = [c.siren ? "Sereia" : null, c.curse ? "Maldição" : null].filter(Boolean);
+  return w.length ? `ligado: ${w.join(" e ")}${c.buy ? ", compra se não tiver" : ""}` : "ligado, nenhum efeito marcado";
+};
+
+// ---------------------------------------------------------------------------
+// Backup das configuracoes (exportar/importar)
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Aviso de versao nova: le as tags do repositorio do projeto no GitHub.
+// Vazio = aviso desligado (o repositorio ainda nao foi criado).
+// ---------------------------------------------------------------------------
+AT.UPDATE_REPO = "Lucyfer-chan/Auto-Twish"; // "dono/repositorio"
+AT.UPDATE_CHECK_HOURS = 6;
+// "v 1.0.4", "v1.0.4", "1.0.4" -> [1, 0, 4]; null se nao for uma versao.
+AT.parseVersion = function (s) {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(s || ""));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+};
+AT.compareVersions = function (a, b) {
+  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) - (b[i] || 0);
+  return 0;
+};
+
+AT.BACKUP_APP = "auto-twish-backup";
+AT.BACKUP_FORMAT = 1;
+// Campos de execucao dos canais (nao vao no backup e nao sao sobrescritos).
+AT.CHANNEL_RUNTIME_KEYS = ["awaitingUser", "twishAvailableAt", "twishLastSeen", "lastSentAt", "nextFireAt"];
+
 // Preco com desconto, igual ao site: arredonda o meio para o par.
 AT.discountedPrice = function (cost, rate) {
   if (!rate) return cost;
@@ -582,6 +656,8 @@ AT.mergeGeneral = function (saved) {
     invDump: AT.sanitizeInvDump(g.invDump),
     autoBoard: AT.sanitizeAutoBoard(g.autoBoard),
     autoUpgrade: AT.sanitizeAutoUpgrade(g.autoUpgrade),
+    autoFeatured: AT.sanitizeAutoFeatured(g.autoFeatured),
+    autoRemedy: AT.sanitizeAutoRemedy(g.autoRemedy),
     protection: AT.sanitizeProtection(g.protection),
     shopList: AT.sanitizeShopList(g.shopList),
     eventKit: AT.sanitizeEventKit(g.eventKit),
@@ -599,11 +675,16 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   mode: "manual", // "manual" | "auto" | "semi"
   awaitingUser: false, // semi-automatico: comando digitado, esperando o jogador enviar
   notifyEvents: false, // notificacao quando comeca um evento neste canal
+  // notifyBigEvents: notificacao de Grande Evento (Invasao Pirata, Cthulhu...).
+  // Fora dos padroes de proposito: sem valor salvo, segue notifyEvents (antes
+  // da 1.0.4 os dois avisos eram uma opcao so). Ver AT.notifiesBigEvents.
   duelAccept: null, // null = usa o valor geral; objeto = excecao deste canal
   turboSell: null, // idem
   invDump: null, // idem
   autoBoard: null, // idem
   autoUpgrade: null, // idem
+  autoFeatured: null, // idem
+  autoRemedy: null, // idem
   protection: null, // idem
   shopList: null, // idem
   eventKit: null, // idem
@@ -613,6 +694,11 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   twishLastSeen: null, // quando essa leitura foi feita (gravado no maximo 1x/min durante o mesmo cooldown)
   lastSentAt: null, // ultimo envio local bem-sucedido
   nextFireAt: null // timestamp (ms) da proxima tentativa; null = sem agendamento
+};
+
+AT.notifiesBigEvents = function (s) {
+  if (!s) return false;
+  return typeof s.notifyBigEvents === "boolean" ? s.notifyBigEvents : !!s.notifyEvents;
 };
 
 // Garante um numero inteiro dentro dos limites do slider, com fallback pro padrao.
@@ -695,6 +781,8 @@ AT.EXPEDITION_SEAS = {
   fenda: "Fenda do Fim"
 };
 AT.EXPEDITION_SEA_IDS = Object.keys(AT.EXPEDITION_SEAS);
+// Seguro de cada mar (gasto sozinho ao zarpar, se estiver no inventario do barco).
+AT.EXPEDITION_INSURANCE = { sereias: "seguro_sereias", abismo: "seguro_abismo" };
 // Nome do mar (como o bot escreve) -> id.
 AT.expeditionSeaId = function (name) {
   const norm = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
@@ -708,7 +796,7 @@ AT.sanitizeAutoBoard = function (x) {
   const seas = {};
   for (const id of AT.EXPEDITION_SEA_IDS) {
     const e = o.seas && typeof o.seas[id] === "object" && o.seas[id] ? o.seas[id] : {};
-    seas[id] = { enabled: e.enabled !== false, buy: id !== "fenda" && !!e.buy };
+    seas[id] = { enabled: e.enabled !== false, buy: id !== "fenda" && !!e.buy, insure: !!AT.EXPEDITION_INSURANCE[id] && !!e.insure };
   }
   return { enabled: !!o.enabled, seas };
 };

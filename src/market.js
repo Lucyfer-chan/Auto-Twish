@@ -259,6 +259,7 @@ async function marketCycle(source = "alarme") {
         if (held) {
           heldCount++;
           console.warn(`${AT.LOG_PREFIX} Mercado: compra de ${c.species.name} por ${c.l.asking_price} RETIDA para análise.`);
+          logActivity(boat, "mercado", `Compra de ${c.species.name} por ${c.l.asking_price} RETIDA para análise; aquisição desligada.`);
           stopReason = "compra retida para análise da administração — aquisição desligada";
           await pauseMarket();
           try {
@@ -272,6 +273,7 @@ async function marketCycle(source = "alarme") {
         }
         bought.push(c);
         console.log(`${AT.LOG_PREFIX} Mercado: comprou ${c.species.name} ${c.l.weight} kg (${c.pct}%) por ${c.l.asking_price}.`);
+        logActivity(boat, "mercado", `Comprei ${c.species.name} ${c.l.weight} kg (${c.pct}%) por ${c.l.asking_price}.`);
       } else {
         const err = String((res.data && (res.data.error || res.data.message)) || `erro ${res.status || "de rede"}`);
         if (/saldo|insuficiente|insufficient|not_enough|coins/i.test(err)) {

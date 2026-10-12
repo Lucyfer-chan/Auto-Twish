@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Auto Twish — Estatísticas e atividades</title>
+<link rel="stylesheet" href="ui.css" />
+<style>
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  .page-header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .page-header h1 { font-size: 18px; }
+  h2 { font-size: 14px; color: var(--text-muted); margin: 22px 0 8px; font-weight: 600; }
+  .panel { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .hint { color: var(--text-muted); font-size: 12px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 10px; }
+  .toolbar .fld { min-width: 160px; flex: 0 1 220px; }
+  .toolbar label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 12px; }
+  td.pos { color: var(--ok); }
+  td.neg { color: var(--danger); }
+  td.na { color: var(--text-faint); }
+  .acts { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+  .log { list-style: none; margin: 0; padding: 0; }
+  .log li { display: grid; grid-template-columns: 92px 120px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .log .when { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+  .log .who { color: var(--accent-text); overflow: hidden; text-overflow: ellipsis; }
+  .log .kind { color: var(--text-muted); font-size: 11px; display: block; }
+  .empty { color: var(--text-faint); padding: 8px 0; }
+  .btn { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .btn.secondary { background: var(--bg-sunken); color: var(--text); border: 1px solid var(--border); }
+  @media (max-width: 560px) { .log li { grid-template-columns: 1fr; gap: 2px; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="page-header">
+    <h1>Auto Twish — Estatísticas e atividades</h1>
+    <span id="version" class="version"></span>
+  </div>
+  <div class="hint">Os números vêm da sua conta no Twish (lida sempre que a extensão consulta o site, no máximo 1x por minuto por canal) e do que a extensão fez. O dia do jogo vira às 00:30.</div>
+
+  <h2>Estatísticas por canal</h2>
+  <section class="panel">
+    <div class="toolbar">
+      <div class="fld">
+        <label for="period">Período</label>
+        <select id="period">
+          <option value="today">Hoje</option>
+          <option value="yesterday">Ontem</option>
+          <option value="week">Últimos 7 dias</option>
+          <option value="all">Desde o início do registro</option>
+        </select>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="statsTable"></table></div>
+    <div id="statsEmpty" class="empty" hidden>Ainda sem dados neste período. Eles aparecem depois que a extensão ler a sua conta num canal (estando logado no twish.com.br).</div>
+    <div id="actions" class="acts"></div>
+  </section>
+
+  <h2>Atividades recentes</h2>
+  <section class="panel">
+    <div class="toolbar">
+      <div class="fld">
+        <label for="fChannel">Canal</label>
+        <select id="fChannel"><option value="">Todos</option></select>
+      </div>
+      <div class="fld">
+        <label for="fKind">Tipo</label>
+        <select id="fKind"><option value="">Todos</option></select>
+      </div>
+      <button type="button" id="clearLog" class="btn secondary">Limpar registro</button>
+    </div>
+    <ul id="log" class="log"></ul>
+  </section>
+</main>
+<script src="browser-polyfill.js"></script>
+<script src="shared.js"></script>
+<script src="stats.js"></script>
+</body>
+</html>

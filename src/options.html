@@ -451,6 +451,7 @@
   <div class="page-header">
     <h1>Auto Twish</h1>
     <span id="version" class="version"></span>
+    <a href="stats.html" class="btn secondary small" style="margin-left:auto;text-decoration:none">📊 Estatísticas e atividades</a>
   </div>
 
   <section id="safetyBanner" class="panel safety" hidden>
@@ -496,7 +497,18 @@
           <span class="hint" style="display:block">Lido no chat da Twitch (a aba do canal precisa estar aberta). Só reconhece convites para você depois que a extensão ler sua conta no Twish uma vez — <span id="loginInfo"></span>.</span>
         </span>
       </label>
-      <div class="hint">Os avisos de eventos (XP em Dobro, Maré Turbo etc.) se ligam em cada canal, abaixo.</div>
+      <div class="hint">Os avisos de eventos e de Grandes Eventos se ligam em cada canal, abaixo.</div>
+    </div>
+
+    <div class="setting">
+      <div class="setting-title">Backup das configurações</div>
+      <div class="hint">Salva num arquivo .json tudo o que você configurou: configurações gerais, automações, canais (com as exceções) e a lista do Mercado. Para restaurar, importe o arquivo — os canais do backup substituem os de mesmo nome; os outros ficam como estão.</div>
+      <div class="add-row" style="margin-top:8px">
+        <button type="button" id="exportBtn" class="btn secondary">Exportar configurações</button>
+        <button type="button" id="importBtn" class="btn secondary">Importar configurações…</button>
+        <input type="file" id="importFile" accept=".json,application/json" hidden />
+      </div>
+      <div id="backupStatus" class="field-hint" aria-live="polite"></div>
     </div>
   </section>
 
@@ -507,6 +519,8 @@
     <div id="generalSell" class="setting"></div>
     <div id="generalInvDump" class="setting"></div>
     <div id="generalBoard" class="setting"></div>
+    <div id="generalRemedy" class="setting"></div>
+    <div id="generalFeatured" class="setting"></div>
     <div id="generalProtect" class="setting"></div>
     <div id="generalShop" class="setting"></div>
     <div id="generalUpgrade" class="setting"></div>
@@ -654,6 +668,10 @@
       <input type="checkbox" class="js-notify-events" />
       <span>Notificar quando começar um evento neste canal</span>
     </label>
+    <label class="check-row">
+      <input type="checkbox" class="js-notify-big" />
+      <span>Notificar quando começar um Grande Evento neste canal <span class="hint">(Invasão Pirata, Cthulhu, Julgamento de Njord…)</span></span>
+    </label>
 
     <div class="setting" style="margin-top:14px">
       <div class="setting-title">Automações neste canal</div>
@@ -677,6 +695,16 @@
         <span>Embarque automático: usar o padrão geral <span class="hint">(<span class="js-board-summary"></span>)</span></span>
       </label>
       <div class="auto-override js-board-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-remedy-default" />
+        <span>Remédios: usar o padrão geral <span class="hint">(<span class="js-remedy-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-remedy-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-featured-default" />
+        <span>Destaque automático: usar o padrão geral <span class="hint">(<span class="js-featured-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-featured-host"></div>
       <label class="check-row">
         <input type="checkbox" class="js-upgrade-default" />
         <span>Aprimoramento automático: usar o padrão geral <span class="hint">(<span class="js-upgrade-summary"></span>)</span></span>

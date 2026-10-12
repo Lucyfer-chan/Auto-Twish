@@ -448,7 +448,160 @@ async function twishApi(path, { method = "GET", body } = {}) {
 
 async function fetchTwishMe(channel) {
   const r = await twishApi(`/api/${encodeURIComponent(channel)}/me`);
-  return r.ok && isValidMe(r.data) ? { data: r.data, via: r.via } : null;
+  const ok = r.ok && isValidMe(r.data);
+  if (ok) recordStats(channel, r.data);
+  return ok ? { data: r.data, via: r.via } : null;
+}
+
+// ---------------------------------------------------------------------------
+// Estatisticas (storage "stats"), por canal (barco):
+//   { first: foto, days: { "AAAA-MM-DD": { start: foto, end: foto, counts: {...} } } }
+// foto = { at, casts, points, xp, level, coins, duelWins, tourneyWins } — lida
+// do /me (no maximo 1x por minuto por canal). O dia do jogo vira as 00:30.
+// counts: pescarExt ($pescar da extensao) e pescarVoce ($pescar seu).
+// ---------------------------------------------------------------------------
+const STATS_WRITE_MS = 60 * 1000;
+const STATS_KEEP_DAYS = 30;
+const statsLastWrite = new Map();
+let statsChain = Promise.resolve();
+function mutateStats(fn) {
+  statsChain = statsChain
+    .then(async () => {
+      const { stats } = await browser.storage.local.get("stats");
+      const all = stats && typeof stats === "object" ? stats : {};
+      fn(all);
+      for (const c of Object.values(all)) {
+        const days = Object.keys((c && c.days) || {}).sort();
+        for (const d of days.slice(0, Math.max(0, days.length - STATS_KEEP_DAYS))) delete c.days[d];
+      }
+      await browser.storage.local.set({ stats: all });
+    })
+    .catch(() => {});
+  return statsChain;
+}
+function statsDay(c, day) {
+  c.days = c.days || {};
+  if (!c.days[day]) {
+    const prev = Object.keys(c.days).sort().pop();
+    c.days[day] = { start: prev ? c.days[prev].end : null, end: null, counts: {} };
+  }
+  return c.days[day];
+}
+function recordStats(channel, d) {
+  if (!channel || Date.now() - (statsLastWrite.get(channel) || 0) < STATS_WRITE_MS) return;
+  statsLastWrite.set(channel, Date.now());
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const snap = { at: Date.now(), casts: n(d.casts), points: n(d.points), xp: n(d.xp), level: n(d.level), coins: n(d.twishcoins), duelWins: n(d.duel_wins), tourneyWins: n(d.tournament_victories) };
+  mutateStats((all) => {
+    const c = all[channel] || (all[channel] = {});
+    if (!c.first) c.first = snap;
+    const day = statsDay(c, AT.gameDay());
+    if (!day.start) day.start = snap;
+    day.end = snap;
+  });
+}
+function countStat(channel, key) {
+  if (!channel) return;
+  mutateStats((all) => {
+    const c = all[channel] || (all[channel] = {});
+    const day = statsDay(c, AT.gameDay());
+    day.counts[key] = (day.counts[key] || 0) + 1;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// $destaque automatico: em canal ativado, se ainda nao leu o peixe em destaque
+// do dia do jogo (vira as 00:30), pede uma vez (e tenta de novo 1x depois de
+// 10 min se a resposta nao foi lida).
+// ---------------------------------------------------------------------------
+const FEATURED_RETRY_MS = 10 * 60 * 1000;
+async function maybeAutoFeatured(channel, source) {
+  const general = await getGeneralSettings();
+  const s = (await getAllChannelSettings())[channel];
+  if (!s || !s.enabled || safetyLocked) return;
+  if (!AT.effectiveAutoFeatured(s, general).enabled) return;
+  const { gameState } = await browser.storage.local.get("gameState");
+  const st = (gameState || {})[channel] || {};
+  const day = AT.gameDay();
+  if (st.featured && st.featured.seenAt >= AT.gameDayStart()) return; // ja tem o de hoje
+  const ask = st.featuredAsk && st.featuredAsk.day === day ? st.featuredAsk : { day, count: 0, at: 0 };
+  if (ask.count >= 2 || Date.now() - ask.at < FEATURED_RETRY_MS) return;
+  if ((await twitchTabsForChannel(channel)).length === 0) return;
+  await mutateGameState(channel, (x) => {
+    x.featuredAsk = { day, count: ask.count + 1, at: Date.now() };
+  });
+  const r = await enqueueCommand(channel, AT.FEATURED_COMMAND, { reason: `destaque do dia (${source})` });
+  logActivity(channel, "destaque", r.ok ? `Pedi o ${AT.FEATURED_COMMAND} do dia.` : `Falha ao pedir o ${AT.FEATURED_COMMAND} (${r.reason}).`);
+}
+
+// ---------------------------------------------------------------------------
+// Backup das configuracoes (exportar/importar)
+// ---------------------------------------------------------------------------
+async function exportSettings() {
+  const state = await loadState();
+  const channels = {};
+  for (const [name, s] of Object.entries(state.channels)) {
+    const c = { ...s };
+    for (const k of AT.CHANNEL_RUNTIME_KEYS) delete c[k];
+    channels[name] = c;
+  }
+  const { acquisitionList } = await browser.storage.local.get("acquisitionList");
+  return {
+    app: AT.BACKUP_APP,
+    format: AT.BACKUP_FORMAT,
+    version: browser.runtime.getManifest().version,
+    exportedAt: new Date().toISOString(),
+    general: state.general,
+    channels,
+    acquisitionList: Array.isArray(acquisitionList) ? acquisitionList : []
+  };
+}
+
+async function importSettings(data) {
+  if (!data || typeof data !== "object" || data.app !== AT.BACKUP_APP) throw new Error("não é um backup do Auto Twish");
+  if (Number(data.format) > AT.BACKUP_FORMAT) throw new Error("backup de uma versão mais nova da extensão");
+  const general = AT.mergeGeneral(data.general && typeof data.general === "object" ? data.general : {});
+  let nChannels = 0;
+  await mutateGeneral((g) => {
+    const login = g.twishLogin; // a conta e lida do site; nao vem do backup
+    for (const k of Object.keys(g)) delete g[k];
+    Object.assign(g, general, { twishLogin: login || general.twishLogin || null });
+  });
+  await mutateChannels((channels) => {
+    for (const [name, raw] of Object.entries(data.channels && typeof data.channels === "object" ? data.channels : {})) {
+      const id = String(name).toLowerCase();
+      if (!/^[a-z0-9_]{1,40}$/.test(id) || !raw || typeof raw !== "object") continue;
+      const cur = channels[id] || {};
+      const clean = { ...raw };
+      for (const k of AT.CHANNEL_RUNTIME_KEYS) delete clean[k];
+      const runtime = Object.fromEntries(AT.CHANNEL_RUNTIME_KEYS.map((k) => [k, k in cur ? cur[k] : DEFAULT_CHANNEL_SETTINGS[k]]));
+      channels[id] = { ...DEFAULT_CHANNEL_SETTINGS, ...clean, ...runtime };
+      if (!channels[id].enabled) channels[id].nextFireAt = null;
+      nChannels++;
+    }
+  });
+  let nAcq = 0;
+  if (Array.isArray(data.acquisitionList)) {
+    const list = data.acquisitionList.filter((e) => AT.isValidAcquisition(e));
+    nAcq = list.length;
+    await browser.storage.local.set({ acquisitionList: list });
+  }
+  // Reaplica tudo que depende das configuracoes.
+  await updateHeartbeat();
+  await updateEventsPoller();
+  await restoreDueAlarms();
+  await reevaluateTurboSell();
+  for (const fn of [
+    typeof onProtectionSettingsChanged === "function" && onProtectionSettingsChanged,
+    typeof onKitSettingsChanged === "function" && onKitSettingsChanged,
+    typeof onInvDumpSettingsChanged === "function" && onInvDumpSettingsChanged,
+    typeof onUpgradeSettingsChanged === "function" && onUpgradeSettingsChanged,
+    typeof onRemedySettingsChanged === "function" && onRemedySettingsChanged
+  ]) if (fn) fn(null);
+  if (typeof reevaluateShopping === "function") await reevaluateShopping(null);
+  if (typeof scheduleMarket === "function" && general.market && general.market.enabled) await scheduleMarket({ soon: true });
+  logActivity(null, "backup", `Configurações importadas (${nChannels} canal(is), ${nAcq} item(ns) do Mercado; backup da v ${data.version || "?"}).`);
+  return { channels: nChannels, acquisition: nAcq, version: data.version || null };
 }
 
 // Converte a resposta de /me no formato usado aqui.
@@ -810,6 +963,7 @@ async function applyChannelSettings(channel, patch) {
     if ("mode" in patch) s.mode = AT.MODES.includes(patch.mode) ? patch.mode : "manual";
     if ("rod" in patch) s.rod = AT.ROD_MINUTES[patch.rod] !== undefined ? patch.rod : DEFAULT_ROD;
     if ("notifyEvents" in patch) s.notifyEvents = !!patch.notifyEvents;
+    if ("notifyBigEvents" in patch) s.notifyBigEvents = !!patch.notifyBigEvents;
     // Excecoes do canal: null volta a usar o valor geral.
     if ("duelAccept" in patch) {
       s.duelAccept = patch.duelAccept === null ? null : AT.sanitizeDuelAccept({ ...AT.effectiveDuelAccept(previous, stateCache && stateCache.general), ...patch.duelAccept });
@@ -820,7 +974,9 @@ async function applyChannelSettings(channel, patch) {
       ["duelBait", AT.effectiveDuelBait, (a, b) => AT.sanitizeDuelBait({ ...a, ...b })],
       ["invDump", AT.effectiveInvDump, (a, b) => AT.sanitizeInvDump({ ...a, ...b })],
       ["autoBoard", AT.effectiveAutoBoard, (a, b) => mergeAutoBoard(a, b)],
-      ["autoUpgrade", AT.effectiveAutoUpgrade, (a, b) => mergeAutoUpgrade(a, b)]
+      ["autoUpgrade", AT.effectiveAutoUpgrade, (a, b) => mergeAutoUpgrade(a, b)],
+      ["autoFeatured", AT.effectiveAutoFeatured, (a, b) => AT.sanitizeAutoFeatured({ ...a, ...b })],
+      ["autoRemedy", AT.effectiveAutoRemedy, (a, b) => AT.sanitizeAutoRemedy({ ...a, ...b })]
     ]) {
       if (key in patch) s[key] = patch[key] === null ? null : merge(eff(previous, stateCache && stateCache.general), patch[key]);
     }
@@ -873,9 +1029,11 @@ async function applyChannelSettings(channel, patch) {
 
   await updateHeartbeat();
   await updateEventsPoller();
-  if ("notifyEvents" in patch && settings.notifyEvents) refreshEvents(channel, false); // estado inicial, sem notificar o que ja estava rolando
+  if (("notifyEvents" in patch && settings.notifyEvents) || ("notifyBigEvents" in patch && settings.notifyBigEvents)) refreshEvents(channel, false); // estado inicial, sem notificar o que ja estava rolando
   if ("turboSell" in patch) await reevaluateTurboSell(channel);
   if ("invDump" in patch && typeof onInvDumpSettingsChanged === "function") onInvDumpSettingsChanged(channel);
+  if ((("enabled" in patch && settings.enabled) || "autoFeatured" in patch) && settings.enabled) setTimeout(() => maybeAutoFeatured(channel, "ativado").catch(() => {}), 4000);
+  if ("autoRemedy" in patch && typeof onRemedySettingsChanged === "function") onRemedySettingsChanged(channel);
   if (("autoUpgrade" in patch || "shopList" in patch) && typeof onUpgradeSettingsChanged === "function") onUpgradeSettingsChanged(channel);
   if ("protection" in patch) onProtectionSettingsChanged(channel);
   if ("shopList" in patch) await reevaluateShopping(channel);
@@ -1122,8 +1280,10 @@ function eventKeys(ev) {
   return keys;
 }
 
-// Atualiza os eventos de um canal; se notify, avisa os que acabaram de comecar.
+// Atualiza os eventos de um canal e avisa os que acabaram de comecar.
+// notify: false | true (evento e Grande Evento) | { event, big }.
 async function refreshEvents(channel, notify) {
+  const want = notify && typeof notify === "object" ? notify : { event: !!notify, big: !!notify };
   const ev = await fetchActiveEvents(channel);
   if (!ev) return null;
   const turbo = ev.event && ev.event.kind === "cooldown_multiplier" ? ev.event : null;
@@ -1131,25 +1291,47 @@ async function refreshEvents(channel, notify) {
   else cooldownMultipliers.delete(channel);
   const started = await mutateGameState(channel, (st) => {
     const oldKeys = eventKeys(st.events);
+    // 1a vez com o registro de avisos: o que ja era conhecido conta como avisado.
+    if (!Array.isArray(st.notifiedEvents)) st.notifiedEvents = oldKeys;
     // So guarda o que mudou de fato (o tempo restante muda a cada consulta).
     const sameSet = JSON.stringify(oldKeys) === JSON.stringify(eventKeys(ev));
     if (!sameSet || !st.events) st.events = ev;
     else if (ev.event || ev.grande_evento) st.events = ev; // atualiza o tempo restante enquanto houver evento
     return eventKeys(ev).filter((k) => !oldKeys.includes(k));
   });
-  if (notify && started.length) {
-    for (const item of [ev.grande_evento, ev.event].filter(Boolean)) {
+  // Avisos: compara com o que ja foi avisado (nao com "comecou nesta consulta"),
+  // assim uma atualizacao feita antes pelo popup/automacao nao engole o aviso.
+  const toNotify = await mutateGameState(channel, (st) => {
+    const now = eventKeys(ev);
+    const done = Array.isArray(st.notifiedEvents) ? st.notifiedEvents : [];
+    const fresh = now.filter((k) => !done.includes(k));
+    const wanted = (k) => (k.startsWith("grande:") ? want.big : want.event);
+    const out = fresh.filter(wanted);
+    // Consulta que nao avisa nada (popup, automacoes): nao marca nada, para a
+    // consulta periodica ainda avisar. Consulta que avisa: marca tudo que viu.
+    const marks = want.big || want.event ? fresh : [];
+    st.notifiedEvents = [...now.filter((k) => done.includes(k)), ...marks];
+    return out;
+  });
+  if (toNotify.length) {
+    const items = [];
+    if (ev.grande_evento && toNotify.includes(`grande:${ev.grande_evento.name}`)) items.push({ item: ev.grande_evento, big: true });
+    if (ev.event && toNotify.includes(`event:${ev.event.name}`)) items.push({ item: ev.event, big: false });
+    for (const { item, big } of items) {
       try {
         await browser.notifications.create(`event:${channel}:${item.name}`, {
           type: "basic",
-          title: `${item.emoji || "🎉"} ${item.name} em ${channel}`,
+          title: `${item.emoji || (big ? "🌊" : "🎉")} ${big ? "Grande Evento: " : ""}${item.name} em ${channel}`,
           message: `${item.message ? item.message + " — " : ""}termina em ${AT.formatRemaining(item.seconds_remaining * 1000)}.`
         });
       } catch (e) {
         console.warn(`${AT.LOG_PREFIX} Falha ao notificar evento:`, e);
       }
     }
-    console.log(`${AT.LOG_PREFIX} Evento(s) novo(s) em "${channel}":`, started);
+    console.log(`${AT.LOG_PREFIX} Evento(s) avisado(s) em "${channel}":`, toNotify);
+  }
+  if (started.length && typeof logActivity === "function") {
+    for (const k of started) logActivity(channel, "evento", k.startsWith("grande:") ? `Grande Evento começou: ${k.slice(7)}` : `Evento começou: ${k.slice(6)}`);
   }
   await scheduleTurboSell(channel, ev);
   if (typeof scheduleShopping === "function") await scheduleShopping(channel, ev);
@@ -1167,6 +1349,7 @@ function watchesEvents(s, general) {
   const kit = AT.effectiveEventKit(s, general);
   return !!(
     s.notifyEvents ||
+    AT.notifiesBigEvents(s) ||
     s.enabled ||
     AT.effectiveTurboSell(s, general).enabled ||
     (shop.enabled && shop.items.length) ||
@@ -1194,7 +1377,7 @@ async function pollEvents() {
     }
     const before = await browser.storage.local.get("gameState");
     const hadKeys = eventKeys(((before.gameState || {})[channel] || {}).events);
-    const ev = await refreshEvents(channel, !!s.notifyEvents);
+    const ev = await refreshEvents(channel, { event: !!s.notifyEvents, big: AT.notifiesBigEvents(s) });
     const isNew = ev && eventKeys(ev).some((k) => !hadKeys.includes(k));
     // Evento comecando pode zerar o CD da pesca (ex: Mare Turbo): confere a conta.
     if (isNew && s.enabled) schedulePostSendCheck(channel, 3000);
@@ -1291,7 +1474,40 @@ async function maybeAutoAcceptDuel(channel, challenger, expiresAt) {
   if (s && s.enabled) schedulePostSendCheck(channel, 5000);
 }
 
+// ---------------------------------------------------------------------------
+// Registro de atividades (storage "activity": [{ at, channel, kind, msg }],
+// mais novo primeiro, ate ACTIVITY_MAX). Toda automacao que age passa por
+// notifyAutomation, que registra aqui; outros pontos chamam logActivity direto.
+// ---------------------------------------------------------------------------
+const ACTIVITY_MAX = 300;
+const AUTOMATION_KINDS = {
+  "duel-auto": "duelo",
+  "sell-auto": "venda",
+  "board-auto": "expedição",
+  "invdump-auto": "Inv Dump",
+  "kit-auto": "eventos",
+  "protect-auto": "proteção",
+  "shop-auto": "compras",
+  "upgrade-auto": "aprimoramento",
+  "remedy-auto": "remédio",
+  "featured-auto": "destaque"
+};
+let activityChain = Promise.resolve();
+function logActivity(channel, kind, msg) {
+  activityChain = activityChain
+    .then(async () => {
+      const { activity } = await browser.storage.local.get("activity");
+      const list = Array.isArray(activity) ? activity : [];
+      list.unshift({ at: Date.now(), channel: channel || null, kind: String(kind || "").slice(0, 24), msg: String(msg || "").slice(0, 400) });
+      await browser.storage.local.set({ activity: list.slice(0, ACTIVITY_MAX) });
+    })
+    .catch(() => {});
+  return activityChain;
+}
+
 async function notifyAutomation(id, title, message) {
+  const m = /^([a-z-]+):(.*)$/.exec(id);
+  logActivity(m ? m[2].split(":")[0] : null, (m && AUTOMATION_KINDS[m[1]]) || "automação", message);
   const general = await getGeneralSettings();
   if (!general.notifyAutomations) return;
   try {
@@ -1422,6 +1638,7 @@ async function onDuelEnd(channel, mentions) {
     browser.notifications.clear(`duel:${channel}`);
   } catch (e) {}
   console.log(`${AT.LOG_PREFIX} Duelo terminou em "${channel}" (${mentions.join(", ")}); proximo duelo as ${new Date(until).toLocaleTimeString()}.`);
+  logActivity(channel, "duelo", `Duelo terminou (${mentions.map((x) => "@" + x).join(", ")}); próximo duelo às ${new Date(until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`);
   if (typeof onDuelFinished === "function") await onDuelFinished(channel);
 }
 
@@ -1496,6 +1713,8 @@ async function processChannelIfDue(channel, source) {
     if (result.ok && typeof noteFishForBoarding === "function") noteFishForBoarding(channel);
     if (result.ok && typeof scheduleProtectAfterCatch === "function") scheduleProtectAfterCatch(channel);
     if (result.ok && typeof scheduleUpgrade === "function") scheduleUpgrade(channel);
+    if (result.ok) countStat(channel, "pescarExt");
+    if (result.ok && typeof scheduleRemedy === "function") scheduleRemedy(channel);
 
     if (!result.ok) {
       console.warn(`${AT.LOG_PREFIX} (${source}) Falha ao enviar para "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
@@ -1538,6 +1757,7 @@ async function checkChallenge(source) {
     await browser.storage.local.set({ safety: { locked: true, since: Date.now(), secondsLeft: Number(r.data.seconds_left) || null } });
     safetyLocked = true;
     console.warn(`${AT.LOG_PREFIX} (${source}) Verificacao anti-bot pendente: envios e Mercado pausados.`);
+    logActivity(null, "trava", "Verificação anti-bot pendente: envios e Mercado pausados.");
     try {
       await browser.notifications.create("safety", {
         type: "basic",
@@ -1550,6 +1770,7 @@ async function checkChallenge(source) {
     await browser.storage.local.set({ safety: { locked: false, releasedAt: Date.now() } });
     safetyLocked = false;
     console.log(`${AT.LOG_PREFIX} (${source}) Verificacao resolvida: retomando.`);
+    logActivity(null, "trava", "Verificação resolvida: envios retomados.");
     try {
       browser.notifications.clear("safety");
       await browser.notifications.create("safety-ok", {
@@ -1680,8 +1901,11 @@ async function refreshExpedition(channel, source) {
   if (st.atSea) st.source = "api";
   if (st.atSea && (!wasAtSea || prev.id !== st.id)) {
     console.log(`${AT.LOG_PREFIX} (${source}) Expedicao no mar (${st.sea || "?"}, pelo canal "${st.boat || "?"}"): $pescar pausado nos outros canais ate ${new Date(st.endsAt).toLocaleTimeString()}.`);
+    logActivity(st.boat, "expedição", `No mar (${AT.EXPEDITION_SEAS[st.sea] || st.sea || "?"}): $pescar pausado nos outros canais, duelo e torneio bloqueados.`);
   } else if (!st.atSea && wasAtSea) {
     console.log(`${AT.LOG_PREFIX} (${source}) Expedicao terminou: $pescar liberado em todos os canais.`);
+    logActivity(prev.boat, "expedição", "Expedição terminou: $pescar liberado em todos os canais.");
+    if (typeof onExpeditionEnded === "function") onExpeditionEnded(prev.boat);
   }
   expeditionState = st;
   await browser.storage.local.set({ expedition: st });
@@ -1737,6 +1961,7 @@ async function onExpeditionDepartedChat(channel, seaName, mentions, minutes) {
   expeditionState = st;
   await browser.storage.local.set({ expedition: st });
   console.log(`${AT.LOG_PREFIX} (chat) Expedicao anunciada em "${channel}" (${seaName}): $pescar pausado nos outros canais, duelo e torneio bloqueados ate ${new Date(st.endsAt).toLocaleTimeString()}.`);
+  logActivity(channel, "expedição", `Zarpou (${seaName}, visto no chat): $pescar pausado nos outros canais, duelo e torneio bloqueados.`);
 }
 
 // Empurra o proximo $pescar do canal para o fim da expedicao (+ atraso).
@@ -1781,6 +2006,7 @@ async function heartbeatTick() {
   for (const [channel, settings] of Object.entries(channels)) {
     if (settings.enabled) {
       await processChannelIfDue(channel, "heartbeat");
+      await maybeAutoFeatured(channel, "heartbeat").catch(() => {});
     }
   }
 }
@@ -1812,6 +2038,51 @@ async function restoreCooldownMultipliers() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Aviso de versao nova (storage "update": { latest, tag, url, checkedAt }).
+// GET https://api.github.com/repos/<AT.UPDATE_REPO>/tags — a API do GitHub
+// aceita chamadas de qualquer origem (CORS), sem permissao extra. Confere ao
+// iniciar e a cada AT.UPDATE_CHECK_HOURS horas.
+// ---------------------------------------------------------------------------
+const UPDATE_ALARM_NAME = "auto-twish-update";
+async function checkForUpdate(source) {
+  if (!AT.UPDATE_REPO) return null;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${AT.UPDATE_REPO}/tags?per_page=100`, { cache: "no-store", headers: { Accept: "application/vnd.github+json" } });
+    if (!r.ok) return null;
+    const tags = await r.json();
+    const current = AT.parseVersion(browser.runtime.getManifest().version);
+    let best = null;
+    for (const t of Array.isArray(tags) ? tags : []) {
+      const v = AT.parseVersion(t && t.name);
+      if (v && (!best || AT.compareVersions(v, best.v) > 0)) best = { v, tag: t.name };
+    }
+    const newer = best && current && AT.compareVersions(best.v, current) > 0;
+    const update = {
+      checkedAt: Date.now(),
+      latest: newer ? best.v.join(".") : null,
+      tag: newer ? best.tag : null,
+      url: newer ? `https://github.com/${AT.UPDATE_REPO}/releases/tag/${encodeURIComponent(best.tag)}` : null
+    };
+    const { update: prev } = await browser.storage.local.get("update");
+    await browser.storage.local.set({ update });
+    if (newer && (!prev || prev.latest !== update.latest)) logActivity(null, "versão", `Versão nova disponível no GitHub: v ${update.latest} (você está na v ${current.join(".")}).`);
+    return update;
+  } catch (e) {
+    console.warn(`${AT.LOG_PREFIX} (${source}) Falha ao conferir versão nova:`, e);
+    return null;
+  }
+}
+async function setupUpdateCheck() {
+  if (!AT.UPDATE_REPO) return;
+  if (!(await browser.alarms.get(UPDATE_ALARM_NAME))) await browser.alarms.create(UPDATE_ALARM_NAME, { periodInMinutes: AT.UPDATE_CHECK_HOURS * 60 });
+  const { update } = await browser.storage.local.get("update");
+  if (!update || Date.now() - (update.checkedAt || 0) > 60 * 60 * 1000) await checkForUpdate("inicio");
+}
+browser.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === UPDATE_ALARM_NAME) checkForUpdate("alarme");
+});
+
 async function bootstrap() {
   await readSafetyLock();
   await restoreCooldownMultipliers();
@@ -1820,6 +2091,7 @@ async function bootstrap() {
   await updateEventsPoller();
   await restoreDueAlarms();
   await syncAllTwishTabs();
+  setupUpdateCheck().catch(() => {});
 }
 
 browser.runtime.onInstalled.addListener(bootstrap);
@@ -1893,6 +2165,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (patch.invDump) g.invDump = AT.sanitizeInvDump({ ...g.invDump, ...patch.invDump });
         if (patch.autoBoard) g.autoBoard = mergeAutoBoard(g.autoBoard, patch.autoBoard);
         if (patch.autoUpgrade) g.autoUpgrade = mergeAutoUpgrade(g.autoUpgrade, patch.autoUpgrade);
+        if (patch.autoFeatured) g.autoFeatured = AT.sanitizeAutoFeatured({ ...g.autoFeatured, ...patch.autoFeatured });
+        if (patch.autoRemedy) g.autoRemedy = AT.sanitizeAutoRemedy({ ...g.autoRemedy, ...patch.autoRemedy });
         if (patch.protection) g.protection = AT.sanitizeProtection({ ...g.protection, ...patch.protection });
         if (patch.shopList) g.shopList = AT.sanitizeShopList({ ...g.shopList, ...patch.shopList });
         if (patch.eventKit) g.eventKit = mergeEventKit(g.eventKit, patch.eventKit);
@@ -1906,6 +2180,10 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
       if (patch.turboSell) await reevaluateTurboSell();
       if (patch.invDump && typeof onInvDumpSettingsChanged === "function") onInvDumpSettingsChanged(null);
+      if (patch.autoRemedy && typeof onRemedySettingsChanged === "function") onRemedySettingsChanged(null);
+      if (patch.autoFeatured) {
+        for (const ch of Object.keys(await getAllChannelSettings())) setTimeout(() => maybeAutoFeatured(ch, "configuração").catch(() => {}), 3000);
+      }
       if ((patch.autoUpgrade || (patch.shopList && "reserve" in patch.shopList)) && typeof onUpgradeSettingsChanged === "function") onUpgradeSettingsChanged(null);
       if (patch.protection) onProtectionSettingsChanged(null);
       if (patch.shopList) await reevaluateShopping(null);
@@ -1947,6 +2225,16 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       onDuelInvite(channel, String(msg.challenger), String(msg.target), Math.max(1, Number(msg.windowSeconds) || 300));
     }
     return false;
+  }
+
+  // Configuracoes: backup.
+  if (msg?.type === "EXPORT_SETTINGS") {
+    exportSettings().then((data) => sendResponse({ ok: true, data }), (e) => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
+  if (msg?.type === "IMPORT_SETTINGS") {
+    importSettings(msg.data).then((r) => sendResponse({ ok: true, ...r }), (e) => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
   }
 
   // Popup: estado da expedicao (le da conta se estiver velho).
@@ -1996,6 +2284,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (typeof noteFishForBoarding === "function") noteFishForBoarding(channel);
       if (typeof scheduleProtectAfterCatch === "function") scheduleProtectAfterCatch(channel);
       if (typeof scheduleUpgrade === "function") scheduleUpgrade(channel);
+      if (typeof scheduleRemedy === "function") scheduleRemedy(channel);
+      countStat(channel, "pescarVoce");
     }
     else if (channel && typeof msg.text === "string" && msg.text.startsWith("$")) onUserOtherCommand(channel, msg.text);
     return false;
@@ -2020,6 +2310,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (result.ok && typeof noteFishForBoarding === "function") noteFishForBoarding(msg.channel);
       if (result.ok && typeof scheduleProtectAfterCatch === "function") scheduleProtectAfterCatch(msg.channel);
       if (result.ok && typeof scheduleUpgrade === "function") scheduleUpgrade(msg.channel);
+      if (result.ok) countStat(msg.channel, "pescarExt");
+      if (result.ok && typeof scheduleRemedy === "function") scheduleRemedy(msg.channel);
       sendResponse({ ok: result.ok, reason: result.reason, settings: await getChannelSettings(msg.channel) });
     })();
     return true;
@@ -2028,7 +2320,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|invdump-auto|board-auto|upgrade-auto|event):([^:]+)/.exec(id);
+    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|invdump-auto|board-auto|upgrade-auto|remedy-auto|featured-auto|event):([^:]+)/.exec(id);
     if (!m) return;
     const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);

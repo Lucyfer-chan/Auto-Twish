@@ -105,7 +105,12 @@
     <button id="gear" class="icon-btn" title="Configurações" aria-label="Configurações">⚙</button>
   </header>
 
+  <div id="updateLine" class="channel-label" style="margin-bottom:8px;border-color:var(--accent)" hidden></div>
   <div id="channelLabel" class="channel-label muted">Carregando canal…</div>
+  <div id="accessLine" class="channel-label" style="margin-top:8px;border-color:var(--warn);color:var(--warn)" hidden>
+    🔑 <strong style="color:var(--warn)">Sem acesso ao twish.com.br.</strong> A sincronização pela conta e as automações que leem o site não funcionam.
+    <button id="grantAccess" class="btn secondary small" style="margin-top:6px">Conceder acesso</button>
+  </div>
   <div id="safetyLine" class="channel-label" style="margin-top:8px;border-color:var(--warn);color:var(--warn)" hidden>
     🤖 <strong style="color:var(--warn)">Verificação pendente no Twish.</strong> Envios pausados —
     <a href="https://twish.com.br/verificacao" target="_blank" rel="noopener" style="color:var(--warn)">resolver</a>.
@@ -148,6 +153,7 @@
   </div>
 
   <button id="openOptions" class="btn secondary">Configurações</button>
+  <button id="openStats" class="btn secondary" style="margin-top:6px">📊 Estatísticas e atividades</button>
   <div id="status"></div>
 
   <script src="browser-polyfill.js"></script>

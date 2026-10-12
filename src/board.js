@@ -51,6 +51,7 @@ async function boardLog(msg, { phase, notify } = {}) {
     if (phase) x.phase = phase;
   });
   console.log(`${AT.LOG_PREFIX} [Embarque] "${b.channel || "?"}": ${msg}`);
+  if (phase === "failed" && typeof logActivity === "function") logActivity(b.channel, "expedição", `Embarque: ${msg}`);
   if (b.channel) {
     await mutateGameState(b.channel, (st) => {
       st.board = { lastMsg: msg, lastAt: Date.now() };
@@ -116,6 +117,23 @@ async function noteFishForBoarding(channel) {
     x.fishedAt = Date.now();
   });
   await scheduleBoarding(BOARD_AFTER_FISH_MS);
+}
+
+// Seguro do mar (opcional): gasto sozinho ao zarpar, se estiver no inventario do barco.
+async function ensureInsurance(channel, sea) {
+  const item = AT.EXPEDITION_INSURANCE[sea];
+  if (!item) return;
+  const cfg = AT.effectiveAutoBoard((await getAllChannelSettings())[channel] || null, await getGeneralSettings());
+  if (!cfg.seas[sea] || !cfg.seas[sea].insure) return;
+  const me = await fetchTwishMe(channel);
+  const have = me ? Number(((me.data.owned || {}).items || {})[item]) || 0 : 0;
+  if (have > 0) {
+    await boardLog(`seguro do mar já no inventário (${item}).`);
+    return;
+  }
+  const r = await enqueueCommand(channel, `${AT.BUY_COMMAND} ${item}`, { reason: "seguro da expedição" });
+  await boardLog(r.ok ? `comprei o seguro do mar (${item}).` : `falha ao comprar o seguro (${r.reason}).`);
+  if (r.ok) await sleep(2500);
 }
 
 async function runBoarding(source) {
@@ -239,6 +257,7 @@ async function runBoarding(source) {
       x.phase = "joined";
     });
     await sleep(1500);
+    await ensureInsurance(ch, b.sea);
     const rd = await twishApi(`${base}/${encodeURIComponent(b.roomId)}/ready`, { method: "POST", body: {} });
     if (rd.ok) await boardLog(`embarquei na sala de @${b.opener || "?"} (${AT.EXPEDITION_SEAS[b.sea] || b.sea}) e confirmei a prontidão.`, { phase: "ready", notify: true });
     else {

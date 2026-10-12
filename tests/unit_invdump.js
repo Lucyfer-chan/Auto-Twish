@@ -1,0 +1,18 @@
+const fs = require('fs'); const path = require('path'); eval(fs.readFileSync((process.argv[2] || path.join(__dirname, '..', 'src')) + '/shared.js', 'utf8') + ';global.AT=AT;');
+const st = (id, tier, prices, extra = {}) => ({ fish_id: id, id, tier, count: prices.length, instances: prices.map((p) => ({ price: p, escrowed: false })), ...extra });
+const inv = (fish, capT = 100, capS = 10) => ({ capacity: { max_fish_total: capT, max_fish_per_species: capS }, total: fish.reduce((a, f) => a + f.count, 0), fish });
+const show = (name, i, o) => { const p = AT.planInvDump(i, o); console.log(name.padEnd(58), JSON.stringify({ vende: p.sells.map((x) => `${x.qty}x ${x.id} (${x.coins})`), total: `${p.total}/${p.capTotal}`, cheiasSemVenda: p.blocked })); };
+const ten = (n, base) => Array.from({ length: n }, (_, k) => base + k);
+show('1. nada cheio', inv([st('sardinha', 'common', [2, 2]), st('lucio', 'rare', [27])]), {});
+show('2. especie cheia (10/10): vende a mais barata dela', inv([st('sardinha', 'common', ten(10, 2)), st('lambari', 'common', [1])]), {});
+show('3. especie cheia em 2 pilhas (ascensao 8+2)', inv([st('vieira', 'uncommon', [12, 12, 12, 11, 11, 9, 9, 9]), { ...st('vieira', 'uncommon', [10, 8]), ascension_level: 1 }]), {});
+show('4. especie cheia mas na whitelist', inv([st('vieira', 'uncommon', ten(10, 9))]), { whitelist: new Set(['vieira']) });
+const many = []; for (let k = 0; k < 20; k++) many.push(st('p' + k, 'common', ten(5, 10 + k)));
+show('5. inventario cheio (100/100), nenhuma especie cheia', inv(many), {});
+const many2 = many.slice(0, 18).concat([st('cara', 'rare', ten(10, 50))]);
+show('6. inventario cheio + especie cheia: vende da cheia', inv(many2.concat([st('x', 'common', [1])]), 101), {});
+show('7. inventario cheio, so sobra mitico e limite Mitico', inv([st('baleia', 'mythic', ten(10, 100)), st('mexilhao', 'common', [3])], 11, 15), { keepFromTier: 'mythic' });
+show('8. idem sem limite de raridade', inv([st('baleia', 'mythic', ten(10, 100)), st('mexilhao', 'common', [3])], 11, 15), { keepFromTier: null });
+show('9. anunciado no Mercado (escrowed) nao sai', inv([{ ...st('lucio', 'rare', ten(10, 20)), instances: ten(10, 20).map((p, k) => ({ price: p, escrowed: k < 3 })) }]), {});
+show('10. mochila (150/15): 15 de uma especie', inv([st('tilapia', 'common', ten(15, 3))], 150, 15), {});
+show('11. Deuses Ancioes cheio nunca vende', inv([st('cthulhu', 'ancient_god', ten(10, 1))]), { keepFromTier: null });
