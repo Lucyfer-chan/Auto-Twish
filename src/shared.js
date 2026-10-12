@@ -71,6 +71,9 @@ AT.DEFAULT_GENERAL_SETTINGS = {
     enabled: false,
     keepFromTier: "mythic" // nunca vende desta raridade em diante (null = sem limite)
   },
+  // Embarque automatico nas expedicoes (sala anunciada no chat de um canal
+  // ativado): entra e confirma pela API do site; pesca antes, se der.
+  autoBoard: null, // preenchido por AT.sanitizeAutoBoard
   // Protecao automatica (Road Map item 7): mantem estas especies na whitelist
   // do jogo ($whitelist) em cada barco. So adiciona; nunca remove.
   protection: {
@@ -530,6 +533,7 @@ AT.mergeGeneral = function (saved) {
     duelAccept: AT.sanitizeDuelAccept(g.duelAccept),
     turboSell: AT.sanitizeTurboSell(g.turboSell),
     invDump: AT.sanitizeInvDump(g.invDump),
+    autoBoard: AT.sanitizeAutoBoard(g.autoBoard),
     protection: AT.sanitizeProtection(g.protection),
     shopList: AT.sanitizeShopList(g.shopList),
     eventKit: AT.sanitizeEventKit(g.eventKit),
@@ -550,6 +554,7 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   duelAccept: null, // null = usa o valor geral; objeto = excecao deste canal
   turboSell: null, // idem
   invDump: null, // idem
+  autoBoard: null, // idem
   protection: null, // idem
   shopList: null, // idem
   eventKit: null, // idem
@@ -639,6 +644,32 @@ AT.EXPEDITION_SEAS = {
   sereias: "Mar das Sereias",
   abismo: "Abismo dos Deuses",
   fenda: "Fenda do Fim"
+};
+AT.EXPEDITION_SEA_IDS = Object.keys(AT.EXPEDITION_SEAS);
+// Nome do mar (como o bot escreve) -> id.
+AT.expeditionSeaId = function (name) {
+  const norm = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  return AT.EXPEDITION_SEA_IDS.find((id) => norm(AT.EXPEDITION_SEAS[id]) === norm(name)) || null;
+};
+
+// Embarque automatico: { enabled, seas: { baia: { enabled, buy }, ... } }.
+// buy = comprar o ticket pelo chat se nao tiver (a Fenda pede Fragmentos, que nao se compram).
+AT.sanitizeAutoBoard = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  const seas = {};
+  for (const id of AT.EXPEDITION_SEA_IDS) {
+    const e = o.seas && typeof o.seas[id] === "object" && o.seas[id] ? o.seas[id] : {};
+    seas[id] = { enabled: e.enabled !== false, buy: id !== "fenda" && !!e.buy };
+  }
+  return { enabled: !!o.enabled, seas };
+};
+AT.effectiveAutoBoard = function (s, g) {
+  return AT.sanitizeAutoBoard((s && s.autoBoard) || (g || AT.DEFAULT_GENERAL_SETTINGS).autoBoard);
+};
+AT.describeAutoBoard = function (c) {
+  if (!c.enabled) return "desligado";
+  const on = AT.EXPEDITION_SEA_IDS.filter((id) => c.seas[id].enabled).map((id) => AT.EXPEDITION_SEAS[id]);
+  return on.length ? `ligado: ${on.join(", ")}` : "ligado, nenhum mar marcado";
 };
 
 // "mm:ss" (sem milissegundos).

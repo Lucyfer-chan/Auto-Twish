@@ -510,6 +510,40 @@ function mountKitEditor(host, save) {
   };
 }
 
+function mountBoardEditor(host, save) {
+  const on = checkRow(
+    h("span", {}, h("strong", { text: "Embarque automático nas expedições" })),
+    "Quando o bot anunciar uma sala de expedição no chat de um canal ativado, entra na sala pelo barco desse canal e confirma a prontidão (pelo site — não há comando de chat para isso). Antes, pesca: enquanto houver mais de 1 vaga e o CD acabar com folga antes de a sala zarpar, espera o próximo $pescar e entra logo depois; restando 1 vaga, entra na hora."
+  );
+  on.row.style.marginTop = "0";
+  const seaRows = {};
+  const list = h("div", { style: "margin-left:26px" });
+  for (const id of AT.EXPEDITION_SEA_IDS) {
+    const sea = checkRow(AT.EXPEDITION_SEAS[id]);
+    const buy = id === "fenda" ? null : checkRow("comprar o ticket se não tiver ($comprar)");
+    const box = h("div", { class: "kit-tier" }, sea.row, buy ? h("div", { class: "kit-sub" }, buy.row) : h("div", { class: "kit-sub hint", text: "entrada: 3 Fragmentos do Fim (não se compram)" }));
+    list.append(box);
+    sea.cb.addEventListener("change", () => save({ seas: { [id]: { enabled: sea.cb.checked } } }));
+    if (buy) buy.cb.addEventListener("change", () => save({ seas: { [id]: { buy: buy.cb.checked } } }));
+    seaRows[id] = { sea, buy };
+  }
+  host.append(on.row, list);
+  on.cb.addEventListener("change", () => save({ enabled: on.cb.checked }));
+  return function render(next) {
+    const c = AT.sanitizeAutoBoard(next);
+    on.cb.checked = c.enabled;
+    list.hidden = !c.enabled;
+    for (const id of AT.EXPEDITION_SEA_IDS) {
+      const r = seaRows[id];
+      r.sea.cb.checked = c.seas[id].enabled;
+      if (r.buy) {
+        r.buy.cb.checked = c.seas[id].buy;
+        r.buy.row.hidden = !c.seas[id].enabled;
+      }
+    }
+  };
+}
+
 function mountInvDumpEditor(host, save) {
   const on = checkRow(
     h("span", {}, h("strong", { text: "Inv Dump" }), " ", h("span", { class: "hint", text: "($vender <espécie> <qtd>)" })),
@@ -619,6 +653,7 @@ function mountDuelBaitEditor(host, save) {
 const renderGeneralDuel = mountDuelEditor($("generalDuel"), (patch) => updateGeneral({ duelAccept: patch }));
 const renderGeneralSell = mountSellEditor($("generalSell"), (patch) => updateGeneral({ turboSell: patch }));
 const renderGeneralInvDump = mountInvDumpEditor($("generalInvDump"), (patch) => updateGeneral({ invDump: patch }));
+const renderGeneralBoard = mountBoardEditor($("generalBoard"), (patch) => updateGeneral({ autoBoard: patch }));
 const renderGeneralProtect = mountProtectEditor($("generalProtect"), (patch) => updateGeneral({ protection: patch }));
 const renderGeneralShop = mountShopEditor($("generalShop"), (patch) => updateGeneral({ shopList: patch }));
 const renderGeneralKit = mountKitEditor($("generalKit"), (patch) => updateGeneral({ eventKit: patch }));
@@ -646,6 +681,7 @@ function renderGeneral() {
   renderGeneralDuel(g.duelAccept);
   renderGeneralSell(g.turboSell);
   renderGeneralInvDump(g.invDump);
+  renderGeneralBoard(g.autoBoard);
   renderGeneralProtect(g.protection);
   renderGeneralShop(g.shopList);
   renderGeneralKit(g.eventKit);
@@ -734,7 +770,8 @@ function createCard(name) {
     ["eventKit", "kit", mountKitEditor],
     ["tournament", "tourney", mountTourneyEditor],
     ["duelBait", "duelbait", mountDuelBaitEditor],
-    ["invDump", "invdump", mountInvDumpEditor]
+    ["invDump", "invdump", mountInvDumpEditor],
+    ["autoBoard", "board", mountBoardEditor]
   ]) {
     const def = q(`.js-${cls}-default`);
     const hostEl = q(`.js-${cls}-host`);
@@ -862,7 +899,8 @@ function renderCard(name) {
     ["eventKit", "kit", AT.describeEventKit, AT.sanitizeEventKit],
     ["tournament", "tourney", AT.describeTournament, AT.sanitizeTournament],
     ["duelBait", "duelbait", AT.describeDuelBait, AT.sanitizeDuelBait],
-    ["invDump", "invdump", AT.describeInvDump, AT.sanitizeInvDump]
+    ["invDump", "invdump", AT.describeInvDump, AT.sanitizeInvDump],
+    ["autoBoard", "board", AT.describeAutoBoard, AT.sanitizeAutoBoard]
   ]) {
     els[`${cls}Default`].checked = !s[key];
     els[`${cls}Summary`].textContent = describe(sanitize(g[key]));

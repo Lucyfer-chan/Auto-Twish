@@ -818,7 +818,8 @@ async function applyChannelSettings(channel, patch) {
       ["eventKit", AT.effectiveEventKit, (a, b) => mergeEventKit(a, b)],
       ["tournament", AT.effectiveTournament, (a, b) => AT.sanitizeTournament({ ...a, ...b })],
       ["duelBait", AT.effectiveDuelBait, (a, b) => AT.sanitizeDuelBait({ ...a, ...b })],
-      ["invDump", AT.effectiveInvDump, (a, b) => AT.sanitizeInvDump({ ...a, ...b })]
+      ["invDump", AT.effectiveInvDump, (a, b) => AT.sanitizeInvDump({ ...a, ...b })],
+      ["autoBoard", AT.effectiveAutoBoard, (a, b) => mergeAutoBoard(a, b)]
     ]) {
       if (key in patch) s[key] = patch[key] === null ? null : merge(eff(previous, stateCache && stateCache.general), patch[key]);
     }
@@ -905,6 +906,14 @@ async function reevaluateTurboSell(only) {
 }
 
 // Mescla parcial da configuracao de eventos (por evento).
+function mergeAutoBoard(cur, patch) {
+  const base = AT.sanitizeAutoBoard(cur);
+  const p = patch || {};
+  const seas = { ...base.seas };
+  for (const id of AT.EXPEDITION_SEA_IDS) if (p.seas && p.seas[id]) seas[id] = { ...seas[id], ...p.seas[id] };
+  return AT.sanitizeAutoBoard({ ...base, ...p, seas });
+}
+
 function mergeEventKit(cur, patch) {
   const base = AT.sanitizeEventKit(cur);
   const out = {};
@@ -1446,6 +1455,7 @@ async function processChannelIfDue(channel, source) {
     const nextFireAt = await recordSendResult(channel, result.ok);
     if (result.ok && AT.followsTwish(settings.mode)) schedulePostSendCheck(channel);
     if (result.ok && typeof scheduleInvDump === "function") scheduleInvDump(channel);
+    if (result.ok && typeof noteFishForBoarding === "function") noteFishForBoarding(channel);
 
     if (!result.ok) {
       console.warn(`${AT.LOG_PREFIX} (${source}) Falha ao enviar para "${channel}" (${result.reason}); nova tentativa em ${RETRY_DELAY_MS / 1000}s.`);
@@ -1841,6 +1851,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (patch.duelAccept) g.duelAccept = AT.sanitizeDuelAccept({ ...g.duelAccept, ...patch.duelAccept });
         if (patch.turboSell) g.turboSell = AT.sanitizeTurboSell({ ...g.turboSell, ...patch.turboSell });
         if (patch.invDump) g.invDump = AT.sanitizeInvDump({ ...g.invDump, ...patch.invDump });
+        if (patch.autoBoard) g.autoBoard = mergeAutoBoard(g.autoBoard, patch.autoBoard);
         if (patch.protection) g.protection = AT.sanitizeProtection({ ...g.protection, ...patch.protection });
         if (patch.shopList) g.shopList = AT.sanitizeShopList({ ...g.shopList, ...patch.shopList });
         if (patch.eventKit) g.eventKit = mergeEventKit(g.eventKit, patch.eventKit);
@@ -1939,6 +1950,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (channel && msg.text === FIXED_MESSAGE) {
       recordUserSent(channel);
       if (typeof scheduleInvDump === "function") scheduleInvDump(channel);
+      if (typeof noteFishForBoarding === "function") noteFishForBoarding(channel);
     }
     else if (channel && typeof msg.text === "string" && msg.text.startsWith("$")) onUserOtherCommand(channel, msg.text);
     return false;
@@ -1960,6 +1972,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const result = await attemptSend(msg.channel);
       await recordSendResult(msg.channel, result.ok); // so reagenda se o canal estiver ativado
       if (result.ok && typeof scheduleInvDump === "function") scheduleInvDump(msg.channel);
+      if (result.ok && typeof noteFishForBoarding === "function") noteFishForBoarding(msg.channel);
       sendResponse({ ok: result.ok, reason: result.reason, settings: await getChannelSettings(msg.channel) });
     })();
     return true;
@@ -1968,7 +1981,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 if (browser.notifications && browser.notifications.onClicked) {
   browser.notifications.onClicked.addListener(async (id) => {
-    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|invdump-auto|event):([^:]+)/.exec(id);
+    const m = /^(semi|duel|duel-auto|sell-auto|protect-auto|shop-auto|kit-auto|invdump-auto|board-auto|event):([^:]+)/.exec(id);
     if (!m) return;
     const channel = m[2];
     const [tab] = await twitchTabsForChannel(channel);

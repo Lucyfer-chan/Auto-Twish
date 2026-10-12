@@ -315,7 +315,19 @@ function renderExpedition() {
   line.hidden = false;
 }
 
+// Embarque automatico: estado da sala que a extensao esta cuidando.
+async function renderBoarding() {
+  const line = $("boardLine");
+  try {
+    const { boarding: b } = await browser.storage.local.get("boarding");
+    const show = b && b.lastMsg && ["waiting", "joined", "ready"].includes(b.phase) && Date.now() < (b.deadlineAt || 0) + 60000;
+    line.hidden = !show;
+    if (show) line.textContent = `⛵ Embarque (${b.channel}): ${b.lastMsg}`;
+  } catch (e) {}
+}
+
 async function loadExpedition() {
+  renderBoarding();
   try {
     const r = await browser.runtime.sendMessage({ type: "GET_EXPEDITION", channel: currentChannel || null });
     expedition = r && r.expedition;
@@ -327,6 +339,7 @@ async function loadExpedition() {
 
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.safety) renderSafety();
+  if (area === "local" && changes.boarding) renderBoarding();
   if (area === "local" && changes.expedition) {
     expedition = changes.expedition.newValue || null;
     renderExpedition();

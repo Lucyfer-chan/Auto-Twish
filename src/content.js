@@ -256,6 +256,10 @@ const DUEL_RESULT_RE = /\b(venceu|perdeu|empat\w*)\b/i;
 // Partida de expedicao: "⛵ Zarpou à Baía das Lendas: @a, @b e @c! Por 30 min
 // o $pescar de vocês pesca no mar."
 const EXPEDITION_DEPART_RE = /Zarpou\s+(?:(?:à|ao|a|para|pro|pra)\s+)?(.+?):\s*(.*?)!\s*Por\s+(\d+)\s*min/i;
+// Sala de expedicao aberta: "⛵ @x abriu uma expedição à Baía das Lendas!
+// Embarque pelo site em twish.com.br/c/x/expedicoes/<id> — até 4 tripulantes,
+// e a sala zarpa em 10 min."
+const EXPEDITION_OPEN_RE = /@(\w+)\s+abriu\s+uma\s+expedi\S*\s+(?:(?:à|ao|a|para|pro|pra)\s+)?(.+?)!.*?\/expedicoes\/([0-9a-f-]{36})/i;
 const DUEL_INVITE_RE = /@(\w+)\s+desafiou\s+@(\w+)\s+pra um duelo!.*?tem\s+(?:(\d+)m)?\s*(?:(\d+)s)?\s*pra usar\s+\$aceitar/i;
 
 function chatLineAuthor(node) {
@@ -285,6 +289,23 @@ function handleChatLine(node) {
   // background conferir a API do torneio na hora (o formato exato nao importa).
   if (/torneio/i.test(text) && /\$(entrar|join)\b/i.test(text)) {
     browser.runtime.sendMessage({ type: "CHAT_TOURNAMENT_HINT" }).catch(() => {});
+  }
+
+  const opened = EXPEDITION_OPEN_RE.exec(text);
+  if (opened) {
+    const crew = /até\s+(\d+)\s+tripulantes/i.exec(text);
+    const mins = /zarpa\s+em\s+(\d+)\s*min/i.exec(text);
+    browser.runtime
+      .sendMessage({
+        type: "CHAT_EXPEDITION_OPENED",
+        opener: opened[1],
+        sea: opened[2].trim(),
+        roomId: opened[3],
+        maxCrew: crew ? parseInt(crew[1], 10) : null,
+        minutes: mins ? parseInt(mins[1], 10) : null
+      })
+      .catch(() => {});
+    return;
   }
 
   const departed = EXPEDITION_DEPART_RE.exec(text);

@@ -1,4 +1,4 @@
-# Auto Twish — v 1.0.1
+# Auto Twish — v 1.0.2
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -147,6 +147,27 @@ Enquanto a sala ainda está aberta (antes de zarpar), nada é travado. O popup
 mostra "⚓ Em expedição" com o mar e o horário em que a pesca volta. A trava
 só lê o estado e fica sempre ligada.
 
+## Embarque automático nas expedições (desligado por padrão)
+
+Quando o bot anuncia uma sala no chat de um canal **ativado** na extensão
+("⛵ @fulano abriu uma expedição à Baía das Lendas! Embarque pelo site em
+twish.com.br/c/…/expedicoes/<id> — até 4 tripulantes, e a sala zarpa em 10
+min."), a extensão entra na sala pelo barco desse canal e confirma a
+prontidão. Entrar e confirmar não têm comando de chat: são feitos pela API do
+site (`POST /api/{canal}/expeditions/{id}/join` e `/ready`), uma exceção
+liberada pelo jogador.
+
+- **Pescar antes:** enquanto a sala tiver mais de 1 vaga e o CD da pesca
+  acabar com folga (1 min) antes de ela zarpar, espera o próximo `$pescar`
+  neste canal e entra logo depois. Com 1 vaga só, ou sem folga, entra na hora.
+- **Mares:** cada um pode ser marcado ou não. Sem a entrada no inventário do
+  barco, só entra se "comprar o ticket se não tiver" estiver ligado para aquele
+  mar (`$comprar`). A Fenda do Fim pede 3 Fragmentos do Fim, que não se
+  compram.
+- Não entra em sala aberta por você mesmo, nem com outra sala em andamento,
+  vara fraca, torneio ou duelo (o site recusa; o motivo aparece no popup).
+- Geral + exceção por canal. O popup mostra "⛵ Embarque" com o andamento.
+
 ## Mercado — aquisição automática
 
 Na página de configurações, seção "Mercado". Desligada por padrão.
@@ -256,7 +277,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 1.0.1 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 1.0.2 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -323,6 +344,12 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 1.0.2** — Embarque automático nas expedições (desligado por padrão;
+  geral + exceção por canal): com a sala anunciada no chat de um canal
+  ativado, entra e confirma a prontidão pela API do site (exceção liberada
+  pelo jogador). Pesca antes enquanto houver mais de 1 vaga e o CD acabar com
+  folga; com 1 vaga, entra na hora. Mares escolhidos; compra do ticket pelo
+  chat opcional por mar. Popup mostra o andamento.
 - **v 1.0.1** — Trava da Expedição, Inv Dump e Sorte Rara por raridade.
   - Trava da Expedição (sempre ligada): no mar (30 min), o `$pescar` só sai no
     canal por onde você zarpou; aceite de duelo e entrada em torneio ficam

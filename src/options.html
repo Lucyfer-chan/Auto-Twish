@@ -506,6 +506,7 @@
     <div id="generalDuel" class="setting"></div>
     <div id="generalSell" class="setting"></div>
     <div id="generalInvDump" class="setting"></div>
+    <div id="generalBoard" class="setting"></div>
     <div id="generalProtect" class="setting"></div>
     <div id="generalShop" class="setting"></div>
     <div id="generalKit" class="setting"></div>
@@ -514,7 +515,7 @@
     <div class="setting">
       <label class="check-row" style="margin-top:0">
         <input type="checkbox" id="notifyAutomations" />
-        <span>Avisar quando uma automação agir (duelo aceito, venda feita, Inv Dump)</span>
+        <span>Avisar quando uma automação agir (duelo aceito, venda feita, Inv Dump, embarque)</span>
       </label>
     </div>
   </section>
@@ -670,6 +671,11 @@
         <span>Inv Dump: usar o padrão geral <span class="hint">(<span class="js-invdump-summary"></span>)</span></span>
       </label>
       <div class="auto-override js-invdump-host"></div>
+      <label class="check-row">
+        <input type="checkbox" class="js-board-default" />
+        <span>Embarque automático: usar o padrão geral <span class="hint">(<span class="js-board-summary"></span>)</span></span>
+      </label>
+      <div class="auto-override js-board-host"></div>
       <label class="check-row">
         <input type="checkbox" class="js-protect-default" />
         <span>Proteção: usar o padrão geral <span class="hint">(<span class="js-protect-summary"></span>)</span></span>
