@@ -1,4 +1,4 @@
-# Auto Twish — v 1.0.6
+# Auto Twish — v 1.0.7
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -40,6 +40,15 @@ preferir.
   temporariamente fora do ar depois que a mensagem já foi enviada com
   sucesso, use o **modo automático** (abaixo) — ele sincroniza com o
   cooldown real do site do Twish em vez de confiar só numa estimativa.
+- **Leitor do chat:** a extensão confere a cada minuto (e ao instalar ou
+  iniciar) se o leitor do chat está ativo em cada aba da Twitch e o liga se
+  faltar. No Chrome, as abas que já estavam abertas quando a extensão foi
+  instalada ou atualizada ficavam sem ele (duelo, destaque e expedição não eram
+  lidos até recarregar a aba). Se não der para ligar, a aba é recarregada (só
+  ao instalar ou iniciar).
+- **Sem atraso no XP em Dobro e com Turbo:** enquanto durar o XP em Dobro no
+  canal, ou houver um Turbo ativo (ligado pela extensão ou por você), o
+  `$pescar` sai assim que o CD acaba, sem o atraso aleatório.
 
 ## Modos
 
@@ -390,7 +399,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 1.0.6 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 1.0.7 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -461,6 +470,10 @@ o código pronto caso um dia se queira rodar em Chromium.
 
 ## Histórico de versões
 
+- **v 1.0.7** — Chrome: o leitor do chat é ligado nas abas da Twitch que já
+  estavam abertas ao instalar/atualizar (antes, duelo e destaque não eram lidos
+  até recarregar a aba); conferência a cada minuto. XP em Dobro e Turbo ativo:
+  `$pescar` sem o atraso aleatório.
 - **v 1.0.6** — Mensagens aleatórias no chat (desligado por padrão; geral +
   exceção por canal): neutras a cada 15–90 min e reações depois de duelo e de
   pesca, com chance por raridade. Só envia com o campo do chat vazio.
