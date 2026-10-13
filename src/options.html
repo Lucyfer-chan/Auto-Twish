@@ -501,6 +501,21 @@
     </div>
 
     <div class="setting">
+      <div class="setting-title">Verificação do Twish</div>
+      <div class="hint">Quando o Twish pedir a verificação (mensagem do bot marcando você no chat, ou a trava de segurança), os envios param até você resolver. Aqui você escolhe como ser avisado. A extensão só avisa — quem resolve a verificação é você.</div>
+      <label class="check-row">
+        <input type="checkbox" id="verifyWindow" />
+        <span>Abrir twish.com.br/verificacao numa janela nova, em destaque</span>
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="verifySound" />
+        <span>Tocar um alerta sonoro
+          <button type="button" id="verifyTest" class="btn secondary" style="margin-left:8px;padding:2px 10px">Testar som</button>
+        </span>
+      </label>
+    </div>
+
+    <div class="setting">
       <div class="setting-title">Backup das configurações</div>
       <div class="hint">Salva num arquivo .json tudo o que você configurou: configurações gerais, automações, canais (com as exceções) e a lista do Mercado. Para restaurar, importe o arquivo — os canais do backup substituem os de mesmo nome; os outros ficam como estão.</div>
       <div class="add-row" style="margin-top:8px">

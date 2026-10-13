@@ -100,3 +100,15 @@
     }
   });
 })();
+
+// Alerta sonoro da verificacao: o service worker nao toca audio, entao toca
+// num documento offscreen (offscreen.html). Usado por playAlertSound().
+self.__atOffscreenPlay = async function () {
+  const has = (await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] })).length > 0;
+  if (!has) {
+    await chrome.offscreen.createDocument({ url: "offscreen.html", reasons: ["AUDIO_PLAYBACK"], justification: "Alerta sonoro da verificação do Twish" }).catch((e) => {
+      if (!/single offscreen|already/i.test(String(e && e.message))) throw e;
+    });
+  }
+  await chrome.runtime.sendMessage({ type: "OFFSCREEN_PLAY_ALERT" });
+};

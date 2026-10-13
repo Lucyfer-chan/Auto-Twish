@@ -55,6 +55,9 @@ AT.DEFAULT_GENERAL_SETTINGS = {
   twishLogin: null, // login do jogador no Twish (lido da API; usado pra reconhecer convites de duelo)
   notifyDuelInvites: false, // notificacao quando alguem te desafia pra um duelo
   notifyAutomations: false, // notificacao quando uma automacao age (duelo aceito, venda feita)
+  // Verificacao anti-bot pedida: abrir twish.com.br/verificacao numa janela
+  // nova em foco e tocar um alerta sonoro. So avisa; nunca responde.
+  verifyAlert: null, // preenchido por AT.sanitizeVerifyAlert
   // Automacoes por evento (Road Map item 3). Valor geral; cada canal pode ter uma excecao.
   duelAccept: {
     enabled: false, // aceitar duelos sozinho ($aceitar)
@@ -512,6 +515,7 @@ AT.GREASE_ITEM = "graxa_molinete"; // Graxa de Molinete (Cuidado): peixe 5% mais
 AT.BAIT_COMMAND = "$isca";
 AT.UNEQUIP_BAIT_COMMAND = "$desequiparisca";
 AT.JOIN_TOURNAMENT_COMMAND = "$entrar";
+AT.FLEET_BOARD_COMMAND = "$embarcar"; // Frota do Capitao
 
 AT.cleanItemId = function (v) {
   const t = typeof v === "string" ? v.trim().toLowerCase() : "";
@@ -525,8 +529,33 @@ AT.sanitizeKitEntry = function (x) {
     turbo: !!o.turbo,
     turboBuy: !!o.turboBuy,
     sharpen: !!o.sharpen,
-    sharpenBuy: !!o.sharpenBuy
+    sharpenBuy: !!o.sharpenBuy,
+    baitBuy: !!o.baitBuy, // comprar a isca ($comprar <isca> <qtd>) se nao tiver
+    baitBuyQty: AT.clampInt(o.baitBuyQty, 1, 200, 10)
   };
+};
+// Alerta sonoro: tres bipes curtos num AudioContext (fundo do Firefox ou offscreen do Chrome).
+AT.playBeeps = function (ctx) {
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  const t0 = ctx.currentTime + 0.05;
+  for (let i = 0; i < 3; i++) {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.value = i === 2 ? 1175 : 880;
+    const t = t0 + i * 0.32;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+    o.connect(g).connect(ctx.destination);
+    o.start(t);
+    o.stop(t + 0.27);
+  }
+  setTimeout(() => ctx.close().catch(() => {}), 1500);
+};
+AT.sanitizeVerifyAlert = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  return { openWindow: !!o.openWindow, sound: !!o.sound };
 };
 // Sorte Rara: uma regra (isca + reforcos) por raridade sorteada.
 // { enabled, tiers: { uncommon: entrada, rare: entrada, ... } }
@@ -663,6 +692,7 @@ AT.mergeGeneral = function (saved) {
     eventKit: AT.sanitizeEventKit(g.eventKit),
     tournament: AT.sanitizeTournament(g.tournament),
     duelBait: AT.sanitizeDuelBait(g.duelBait),
+    verifyAlert: AT.sanitizeVerifyAlert(g.verifyAlert),
     market: { ...AT.DEFAULT_GENERAL_SETTINGS.market, ...(g.market || {}) }
   };
 };
@@ -798,7 +828,9 @@ AT.sanitizeAutoBoard = function (x) {
     const e = o.seas && typeof o.seas[id] === "object" && o.seas[id] ? o.seas[id] : {};
     seas[id] = { enabled: e.enabled !== false, buy: id !== "fenda" && !!e.buy, insure: !!AT.EXPEDITION_INSURANCE[id] && !!e.insure };
   }
-  return { enabled: !!o.enabled, seas };
+  // immediate: entra na sala na hora, sem esperar pescar antes.
+  // fleet: embarcar na Frota do Capitao ($embarcar no chat; viagem de graca).
+  return { enabled: !!o.enabled, immediate: !!o.immediate, fleet: !!o.fleet, seas };
 };
 AT.effectiveAutoBoard = function (s, g) {
   return AT.sanitizeAutoBoard((s && s.autoBoard) || (g || AT.DEFAULT_GENERAL_SETTINGS).autoBoard);
@@ -806,7 +838,8 @@ AT.effectiveAutoBoard = function (s, g) {
 AT.describeAutoBoard = function (c) {
   if (!c.enabled) return "desligado";
   const on = AT.EXPEDITION_SEA_IDS.filter((id) => c.seas[id].enabled).map((id) => AT.EXPEDITION_SEAS[id]);
-  return on.length ? `ligado: ${on.join(", ")}` : "ligado, nenhum mar marcado";
+  if (c.fleet) on.push("Frota do Capitão");
+  return on.length ? `ligado${c.immediate ? " (imediato)" : ""}: ${on.join(", ")}` : "ligado, nenhum mar marcado";
 };
 
 // "mm:ss" (sem milissegundos).

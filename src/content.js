@@ -260,6 +260,7 @@ const EXPEDITION_DEPART_RE = /Zarpou\s+(?:(?:à|ao|a|para|pro|pra)\s+)?(.+?):\s*
 // Embarque pelo site em twish.com.br/c/x/expedicoes/<id> — até 4 tripulantes,
 // e a sala zarpa em 10 min."
 const EXPEDITION_OPEN_RE = /@(\w+)\s+abriu\s+uma\s+expedi\S*\s+(?:(?:à|ao|a|para|pro|pra)\s+)?(.+?)!.*?\/expedicoes\/([0-9a-f-]{36})/i;
+const FLEET_OPEN_RE = /@(\w+)\s+lan[çc]ou\s+a\s+Frota\s+do\s+Capit[ãa]o!.*?\$embarcar\s+nos\s+pr[óo]ximos\s+(?:(\d+)m)?\s*(?:(\d+)s)?/i;
 const DUEL_INVITE_RE = /@(\w+)\s+desafiou\s+@(\w+)\s+pra um duelo!.*?tem\s+(?:(\d+)m)?\s*(?:(\d+)s)?\s*pra usar\s+\$aceitar/i;
 
 function chatLineAuthor(node) {
@@ -282,7 +283,8 @@ function handleChatLine(node) {
   // mensagem do bot que fale de verificacao faz o background conferir a API.
   if (/verifica[cç][aã]o|verificar|twish\.com\.br\/verificacao/i.test(text)) {
     const mentions = [...text.matchAll(/@(\w+)/g)].map((m) => m[1]);
-    browser.runtime.sendMessage({ type: "CHAT_VERIFICATION_HINT", mentions }).catch(() => {});
+    const link = /twish\.com\.br\/verificacao/i.test(text);
+    browser.runtime.sendMessage({ type: "CHAT_VERIFICATION_HINT", mentions, link }).catch(() => {});
   }
 
   // Torneio: qualquer mensagem do bot sobre torneio que cite $entrar faz o
@@ -305,6 +307,16 @@ function handleChatLine(node) {
         minutes: mins ? parseInt(mins[1], 10) : null
       })
       .catch(() => {});
+    return;
+  }
+
+  // Frota do Capitao: "@x lançou a Frota do Capitão! Digite $embarcar nos
+  // próximos 10m0s — sem ticket e sem vara mínima, até 16 tripulantes."
+  const fleet = FLEET_OPEN_RE.exec(text);
+  if (fleet) {
+    const crew = /até\s+(\d+)\s+tripulantes/i.exec(text);
+    const seconds = (parseInt(fleet[2] || "0", 10) * 60 + parseInt(fleet[3] || "0", 10)) || 600;
+    browser.runtime.sendMessage({ type: "CHAT_FLEET_OPENED", opener: fleet[1], seconds, maxCrew: crew ? parseInt(crew[1], 10) : null }).catch(() => {});
     return;
   }
 

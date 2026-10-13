@@ -16,6 +16,8 @@ for f in ["shared.js", "background.js", "market.js", "protection.js", "shop.js",
     shutil.copy(os.path.join(src, f), dst)
 shutil.copy(os.path.join(extra, "chrome-compat.js"), dst)
 shutil.copy(os.path.join(extra, "sw.js"), dst)
+shutil.copy(os.path.join(extra, "offscreen.html"), dst)  # alerta sonoro (o service worker nao toca audio)
+shutil.copy(os.path.join(extra, "offscreen.js"), dst)
 shutil.copytree(os.path.join(extra, "icons"), os.path.join(dst, "icons"))
 # README proprio do Chrome (instalacao do Chrome, sem as instrucoes do Firefox)
 import subprocess
@@ -24,6 +26,7 @@ subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__f
 
 m = json.load(open(os.path.join(src, "manifest.json")), object_pairs_hook=collections.OrderedDict)
 m["background"] = {"service_worker": "sw.js"}
+m["permissions"] = list(m["permissions"]) + ["offscreen"]  # so no Chrome
 m.pop("browser_specific_settings", None)
 m["minimum_chrome_version"] = "120"  # alarmes de 30 s e Promises nas APIs
 icons = {"16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png"}

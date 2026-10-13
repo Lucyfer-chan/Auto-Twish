@@ -1765,6 +1765,7 @@ async function checkChallenge(source) {
         message: `O Twish pediu a verificação. Envios pausados até você resolver em twish.com.br/verificacao${r.data.seconds_left ? ` (${AT.formatRemaining(r.data.seconds_left * 1000)} restantes)` : ""}.`
       });
     } catch (e) {}
+    alertVerification(source).catch((e) => console.warn(`${AT.LOG_PREFIX} Falha no alerta de verificação:`, e));
     await ensureHeartbeatForSafety();
   } else if (!pending && wasLocked) {
     await browser.storage.local.set({ safety: { locked: false, releasedAt: Date.now() } });
@@ -1782,6 +1783,50 @@ async function checkChallenge(source) {
     await rescheduleAfterSafety();
   }
   return pending;
+}
+
+// Alerta da verificacao: abre twish.com.br/verificacao numa janela nova em
+// foco e/ou toca um som (opcoes gerais; desligadas por padrao). Uma vez a
+// cada 3 min. So avisa — a verificacao e sempre resolvida pelo jogador.
+const VERIFY_URL = "https://twish.com.br/verificacao";
+const VERIFY_ALERT_GAP_MS = 3 * 60 * 1000;
+let lastVerifyAlertAt = 0;
+
+async function alertVerification(source) {
+  const cfg = AT.sanitizeVerifyAlert((await getGeneralSettings()).verifyAlert);
+  if (!cfg.openWindow && !cfg.sound) return;
+  const { verifyAlert } = await browser.storage.local.get("verifyAlert");
+  const last = Math.max(lastVerifyAlertAt, Number(verifyAlert && verifyAlert.at) || 0);
+  if (Date.now() - last < VERIFY_ALERT_GAP_MS) return;
+  lastVerifyAlertAt = Date.now();
+  await browser.storage.local.set({ verifyAlert: { at: lastVerifyAlertAt, source } });
+  logActivity(null, "trava", `Verificação pedida (${source}): ${[cfg.openWindow && "janela aberta", cfg.sound && "alerta sonoro"].filter(Boolean).join(" e ")}.`);
+  if (cfg.sound) playAlertSound().catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao tocar o alerta:`, e));
+  if (cfg.openWindow) await openVerificationWindow();
+}
+
+async function openVerificationWindow() {
+  // Ja aberta? Traz para a frente em vez de abrir outra.
+  const open = await browser.tabs.query({ url: ["*://twish.com.br/verificacao*", "*://*.twish.com.br/verificacao*"] }).catch(() => []);
+  if (open.length) {
+    const t = open[0];
+    await browser.tabs.update(t.id, { active: true });
+    await browser.windows.update(t.windowId, { focused: true, drawAttention: true });
+    return;
+  }
+  const w = await browser.windows.create({ url: VERIFY_URL, focused: true, type: "normal" });
+  if (w && w.id !== undefined) browser.windows.update(w.id, { focused: true, drawAttention: true }).catch(() => {});
+}
+
+// Tres bipes. Firefox: a pagina de fundo toca direto. Chrome: o service worker
+// nao tem audio, entao toca num documento offscreen (offscreen.html).
+async function playAlertSound() {
+  if (typeof AudioContext !== "undefined" && typeof document !== "undefined") {
+    AT.playBeeps(new AudioContext());
+    return;
+  }
+  // Chrome: chrome-compat.js define self.__atOffscreenPlay (documento offscreen).
+  if (typeof self.__atOffscreenPlay === "function") await self.__atOffscreenPlay();
 }
 
 // Durante a trava o heartbeat precisa existir pra conferir de novo.
@@ -2172,6 +2217,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (patch.eventKit) g.eventKit = mergeEventKit(g.eventKit, patch.eventKit);
         if (patch.tournament) g.tournament = AT.sanitizeTournament({ ...g.tournament, ...patch.tournament });
         if (patch.duelBait) g.duelBait = AT.sanitizeDuelBait({ ...g.duelBait, ...patch.duelBait });
+        if (patch.verifyAlert) g.verifyAlert = AT.sanitizeVerifyAlert({ ...g.verifyAlert, ...patch.verifyAlert });
         if (patch.semiAuto) {
           g.semiAuto = { ...g.semiAuto };
           if ("focusTab" in patch.semiAuto) g.semiAuto.focusTab = !!patch.semiAuto.focusTab;
@@ -2207,11 +2253,19 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  if (msg?.type === "TEST_VERIFY_SOUND") {
+    playAlertSound().catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao tocar o alerta:`, e));
+    return false;
+  }
   if (msg?.type === "CHAT_VERIFICATION_HINT") {
     (async () => {
       const general = await getGeneralSettings();
       const mentions = Array.isArray(msg.mentions) ? msg.mentions.map((m) => String(m).toLowerCase()) : [];
-      if (general.twishLogin && mentions.includes(general.twishLogin)) await checkChallenge("chat");
+      if (general.twishLogin && mentions.includes(general.twishLogin)) {
+        // Mensagem com o link da verificacao marcando o jogador: avisa na hora.
+        if (msg.link) await alertVerification("chat");
+        await checkChallenge("chat");
+      }
     })();
     return false;
   }

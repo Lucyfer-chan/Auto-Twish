@@ -5,6 +5,12 @@
 // Afiacao de Anzol (renova quando acabam). Se o item nao estiver no
 // inventario e a compra automatica estiver ligada, compra ($comprar) e ativa.
 // No fim, volta a isca que estava antes (ou desequipa).
+// Isca: sem ela no inventario e com "comprar se nao tiver", compra a
+// quantidade escolhida ($comprar <isca> <qtd>) e equipa.
+//
+// Toda compra daqui (eventos e torneio) confere o preco na loja e o saldo
+// antes de enviar o $comprar, e nunca deixa o saldo abaixo da Reserva de
+// Moedas (a mesma da Lista de Compras e do Aprimoramento).
 //
 // Torneio: le /api/{canal}/tournament (logado). Com inscricoes abertas,
 // entra ($entrar) se a regra do CD da pesca deixar; dentro do torneio,
@@ -29,6 +35,8 @@ const KIT_MIN_EVENT_LEFT_MS = 30 * 1000; // nao ativa reforco com o evento acaba
 const DUEL_BAIT_MAX_MS = 15 * 60 * 1000; // se o fim do duelo nao for visto, solta a isca depois disso
 const BAIT_PRIORITY = ["tournament", "duel", "event"];
 const kitBusy = new Set();
+const BAIT_REBUY_GAP_MS = 2 * 60 * 1000; // nao compra a mesma isca de novo antes disso
+const baitBoughtAt = new Map(); // "canal:isca" -> quando comprou
 
 async function kitConfigs(channel) {
   const general = await getGeneralSettings();
@@ -78,6 +86,7 @@ async function readKitAccount(channel) {
     sharpenRemaining: Number(active.sharpen_remaining) || 0, // s (Afiacao de Anzol)
     greaseCastsLeft: Number(active.grease_casts_left) || 0, // lancadas (Graxa de Molinete)
     remainingMs: Math.max(0, Number(d.cooldown_remaining) || 0) * 1000,
+    coins: Number.isFinite(Number(d.twishcoins)) ? Number(d.twishcoins) : null,
     rodId: eq.rod_id || null
   };
 }
@@ -92,12 +101,48 @@ async function useItem(channel, itemId) {
   return { ok: !!r.ok, error: (r.data && r.data.error) || (r.ok ? null : `HTTP ${r.status}`) };
 }
 
+// Preco atual de um item na loja do canal (com o Desconto na Loja, se houver).
+function kitItemPrice(shop, itemId) {
+  if (!shop) return null;
+  const rate = Number(shop.discount_rate) > 0 && Number(shop.discount_rate) < 1 ? Number(shop.discount_rate) : 0;
+  for (const list of Object.values(shop)) {
+    if (!Array.isArray(list)) continue;
+    const it = list.find((x) => x && x.id === itemId);
+    if (!it) continue;
+    const base = Number(it.cost);
+    if (!(base > 0)) return null;
+    if (!rate) return base;
+    const disc = Number(it.discounted_cost);
+    return Number.isFinite(disc) && disc > 0 ? disc : AT.discountedPrice(base, rate);
+  }
+  return null;
+}
+
+// Compra pelo chat conferindo preco, saldo e reserva. qty = quantidade desejada
+// (minQty = o minimo que vale a pena comprar). Devolve { ok, qty, note }.
+async function kitBuy(channel, itemId, name, qty, acc, minQty = qty) {
+  const general = await getGeneralSettings();
+  const s = (await getAllChannelSettings())[channel] || null;
+  const reserve = AT.effectiveShopList(s, general).reserve;
+  const price = kitItemPrice(await fetchShop(channel, true), itemId);
+  if (!(price > 0)) return { ok: false, note: `${name}: sem o preço na loja; não comprei` };
+  if (!Number.isFinite(acc.coins)) return { ok: false, note: `${name}: sem leitura do saldo; não comprei` };
+  const n = Math.min(qty, Math.floor((acc.coins - reserve) / price));
+  if (n < Math.max(1, minQty)) {
+    return { ok: false, note: `${name}: moedas insuficientes (${price}${qty > 1 ? " cada" : ""}${reserve ? ` + reserva ${reserve}` : ""}; saldo ${acc.coins})` };
+  }
+  const r = await enqueueCommand(channel, n > 1 ? `${AT.BUY_COMMAND} ${itemId} ${n}` : `${AT.BUY_COMMAND} ${itemId}`, { reason: `${name} para o evento` });
+  if (!r.ok) return { ok: false, note: `${name}: falha ao enviar a compra (${r.reason})` };
+  acc.coins -= n * price;
+  return { ok: true, qty: n, note: `${name}: comprei ${n > 1 ? `${n} × ` : ""}${price}` };
+}
+
 // Garante um item ativo: usa do inventario; sem ele, compra pelo chat (se permitido) e usa.
 async function activateItem(channel, itemId, name, allowBuy, acc) {
   if (itemCount(acc, itemId) <= 0) {
     if (!allowBuy) return `${name}: não tem no inventário (compra automática desligada)`;
-    const r = await enqueueCommand(channel, `${AT.BUY_COMMAND} ${itemId}`, { reason: `${name} para o evento` });
-    if (!r.ok) return `${name}: falha ao enviar a compra (${r.reason})`;
+    const b = await kitBuy(channel, itemId, name, 1, acc);
+    if (!b.ok) return b.note;
     await sleep(3000);
   }
   const u = await useItem(channel, itemId);
@@ -112,7 +157,8 @@ async function activateItem(channel, itemId, name, allowBuy, acc) {
 }
 
 // Decide qual isca deveria estar equipada e troca, se preciso.
-async function applyBait(channel, acc, notes) {
+// buyCfg = { baitBuy, baitBuyQty } da regra do evento (so vale para a isca do evento).
+async function applyBait(channel, acc, notes, buyCfg) {
   const st = await readKitState(channel);
   const now = Date.now();
   let owner = null;
@@ -129,8 +175,21 @@ async function applyBait(channel, acc, notes) {
     const one = owner === "duel";
     if (cur === want) return;
     if (!(Number(acc.baits[want]) > 0)) {
-      notes.push(`sem a isca ${want} no inventário`);
-      return;
+      if (owner !== "event" || !buyCfg || !buyCfg.baitBuy) {
+        notes.push(`sem a isca ${want} no inventário`);
+        return;
+      }
+      // Comprou ha pouco e o inventario ainda nao mostra: nao compra de novo.
+      const last = baitBoughtAt.get(`${channel}:${want}`) || 0;
+      if (Date.now() - last < BAIT_REBUY_GAP_MS) {
+        notes.push(`isca ${want} comprada há pouco; esperando aparecer no inventário`);
+        return;
+      }
+      const b = await kitBuy(channel, want, `isca ${want}`, buyCfg.baitBuyQty, acc, 1);
+      notes.push(b.note);
+      if (!b.ok) return;
+      baitBoughtAt.set(`${channel}:${want}`, Date.now());
+      await sleep(3000);
     }
     if (!st.prevBait) {
       await saveKitState(channel, (k) => {
@@ -231,13 +290,14 @@ async function runKitCheck(channel, source) {
       return;
     }
 
-    await applyBait(channel, acc, notes);
+    const evc = st.ctx.event;
+    const evEntry = evc ? AT.kitEntryOf(kit, evc.kind, evc.tier) : null;
+    await applyBait(channel, acc, notes, evEntry && evEntry.enabled ? evEntry : null);
 
     // Reforcos do evento (renova enquanto o evento durar).
     let next = Infinity;
-    const evc = st.ctx.event;
     if (evc) {
-      const entry = AT.kitEntryOf(kit, evc.kind, evc.tier);
+      const entry = evEntry;
       const left = evc.endsAt - Date.now();
       if (entry && entry.enabled && left > KIT_MIN_EVENT_LEFT_MS) {
         if (entry.turbo && acc.boostRemaining <= 2) notes.push(await activateItem(channel, AT.TURBO_ITEM, "Turbo de Pesca", entry.turboBuy, acc));
@@ -247,6 +307,8 @@ async function runKitCheck(channel, source) {
         if (entry.sharpen && acc.sharpenRemaining > 0) next = Math.min(next, acc.sharpenRemaining * 1000 + 2000);
         if (acc.boostRemaining > 0) boostUntil.set(channel, { until: Date.now() + acc.boostRemaining * 1000, cdMs: 20 * 1000 });
       }
+      // Com compra de isca: confere a cada 2 min se a isca acabou no meio do evento.
+      if (entry && entry.enabled && entry.baitId && entry.baitBuy && left > 2 * 60000) next = Math.min(next, 2 * 60000);
       next = Math.min(next, left + 3000);
     }
     if (st.ctx.duel && st.ctx.duel.until) next = Math.min(next, st.ctx.duel.until - Date.now() + 1000);
@@ -255,7 +317,7 @@ async function runKitCheck(channel, source) {
     if (notes.length) {
       const label = evc ? AT.KIT_EVENT_LABELS[evc.kind] + (evc.tier ? ` (${AT.TIER_LABELS[evc.tier]})` : "") + ": " : "";
       await kitLog(channel, `${label}${notes.join(" · ")}`);
-      const acted = notes.filter((n) => /ativado|equipada|de volta|desequipada/.test(n));
+      const acted = notes.filter((n) => /ativado|equipada|de volta|desequipada|comprei/.test(n));
       if (acted.length) await notifyAutomation(`kit-auto:${channel}`, `🎣 Eventos em ${channel}`, acted.join(" · "));
     }
   } finally {

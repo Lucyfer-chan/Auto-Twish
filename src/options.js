@@ -11,6 +11,8 @@ const semiFocusEl = $("semiFocus");
 const semiNotifyEl = $("semiNotify");
 const notifyDuelEl = $("notifyDuel");
 const notifyAutomationsEl = $("notifyAutomations");
+const verifyWindowEl = $("verifyWindow");
+const verifySoundEl = $("verifySound");
 
 // ---------------------------------------------------------------------------
 // Campos das automacoes (usados no padrao geral e nas excecoes dos canais).
@@ -432,12 +434,17 @@ function mountKitEditor(host, save) {
     h("div", { class: "setting-title", text: "Eventos: isca e reforços" }),
     h("div", {
       class: "hint",
-      text: "Enquanto o evento durar: equipa a isca escolhida ($isca) e mantém ativos o Turbo de Pesca (Impulso) e/ou a Afiação de Anzol (Cuidado), renovando quando acabam. Sem o item no inventário, compra ($comprar) se você permitir. Ativar o item é feito pelo site (não existe comando de chat para isso). No fim do evento, volta a isca que você estava usando."
+      text: "Enquanto o evento durar: equipa a isca escolhida ($isca) e mantém ativos o Turbo de Pesca (Impulso) e/ou a Afiação de Anzol (Cuidado), renovando quando acabam. Sem o item no inventário, compra ($comprar) se você permitir — só se houver saldo, sem passar da Reserva de moedas da Lista de Compras (vale também para o torneio). Ativar o item é feito pelo site (não existe comando de chat para isso). No fim do evento, volta a isca que você estava usando."
     })
   );
   // Campos de uma regra (isca + Turbo + Afiacao). send(patch) grava a regra.
-  function entryFields(send, baitLabel) {
+  // withBaitBuy: mostra "comprar a isca se não tiver" (Sorte Rara).
+  function entryFields(send, baitLabel, withBaitBuy) {
     const bait = baitSelect();
+    const baitBuy = checkRow("comprar a isca se não tiver", "compra pelo chat ($comprar) a quantidade abaixo e equipa; se acabar durante o evento, compra de novo");
+    const baitQty = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", style: "width:80px" });
+    const baitBuyBox = h("div", { class: "kit-sub" }, baitBuy.row, h("div", { class: "acq-field", style: "max-width:200px;margin-left:26px" }, h("label", { text: "Quantidade por compra" }), baitQty));
+    if (!withBaitBuy) baitBuyBox.hidden = true;
     const turbo = checkRow("Ativar Turbo de Pesca (20 s de CD por 5 min)");
     const turboBuy = checkRow("comprar se não tiver");
     const sharpen = checkRow("Ativar Afiação de Anzol (+5% pontos e XP por 30 min)");
@@ -446,12 +453,15 @@ function mountKitEditor(host, save) {
       "div",
       { class: "kit-sub" },
       h("div", { class: "acq-field", style: "max-width:320px;margin-top:6px" }, h("label", { text: baitLabel }), bait),
+      baitBuyBox,
       turbo.row,
       h("div", { class: "kit-sub" }, turboBuy.row),
       sharpen.row,
       h("div", { class: "kit-sub" }, sharpenBuy.row)
     );
     bait.addEventListener("change", () => send({ baitId: bait.value || null }));
+    baitBuy.cb.addEventListener("change", () => send({ baitBuy: baitBuy.cb.checked }));
+    baitQty.addEventListener("change", () => send({ baitBuyQty: AT.clampInt(baitQty.value, 1, 200, 10) }));
     turbo.cb.addEventListener("change", () => send({ turbo: turbo.cb.checked }));
     turboBuy.cb.addEventListener("change", () => send({ turboBuy: turboBuy.cb.checked }));
     sharpen.cb.addEventListener("change", () => send({ sharpen: sharpen.cb.checked }));
@@ -460,6 +470,12 @@ function mountKitEditor(host, save) {
       el,
       render(e) {
         setBait(bait, e.baitId);
+        if (withBaitBuy) {
+          baitBuyBox.hidden = !e.baitId;
+          baitBuy.cb.checked = e.baitBuy;
+          baitQty.parentElement.hidden = !e.baitBuy;
+          if (document.activeElement !== baitQty) baitQty.value = e.baitBuyQty;
+        }
         turbo.cb.checked = e.turbo;
         turboBuy.cb.checked = e.turboBuy;
         turboBuy.row.hidden = !e.turbo;
@@ -489,7 +505,7 @@ function mountKitEditor(host, save) {
       const tOn = checkRow(h("span", {}, "Sorte Rara de peixe ", h("strong", { text: AT.TIER_LABELS[t] })));
       const tSend = (p) => send({ tiers: { [t]: p } });
       tOn.cb.addEventListener("change", () => tSend({ enabled: tOn.cb.checked }));
-      const f = entryFields(tSend, `Isca na Sorte Rara (${AT.TIER_LABELS[t]})`);
+      const f = entryFields(tSend, `Isca na Sorte Rara (${AT.TIER_LABELS[t]})`, true);
       sub.append(h("div", { class: "kit-tier" }, tOn.row, f.el));
       tierRows[t] = { on: tOn, f };
     }
@@ -588,6 +604,11 @@ function mountBoardEditor(host, save) {
   on.row.style.marginTop = "0";
   const seaRows = {};
   const list = h("div", { style: "margin-left:26px" });
+  const immediate = checkRow("Embarque imediato", "entra na sala (ou na Frota) assim que for anunciada, sem esperar pescar antes");
+  const fleet = checkRow("Frota do Capitão ($embarcar)", "quando o streamer lançar a Frota, embarca pelo chat (viagem de graça; precisa de 20 pescas nesse barco)");
+  list.append(immediate.row, h("div", { class: "kit-tier" }, fleet.row));
+  immediate.cb.addEventListener("change", () => save({ immediate: immediate.cb.checked }));
+  fleet.cb.addEventListener("change", () => save({ fleet: fleet.cb.checked }));
   for (const id of AT.EXPEDITION_SEA_IDS) {
     const sea = checkRow(AT.EXPEDITION_SEAS[id]);
     const buy = id === "fenda" ? null : checkRow("comprar o ticket se não tiver ($comprar)");
@@ -611,6 +632,8 @@ function mountBoardEditor(host, save) {
     const c = AT.sanitizeAutoBoard(next);
     on.cb.checked = c.enabled;
     list.hidden = !c.enabled;
+    immediate.cb.checked = c.immediate;
+    fleet.cb.checked = c.fleet;
     for (const id of AT.EXPEDITION_SEA_IDS) {
       const r = seaRows[id];
       r.sea.cb.checked = c.seas[id].enabled;
@@ -805,6 +828,8 @@ function renderGeneral() {
   semiNotifyEl.checked = !!g.semiAuto.notify;
   notifyDuelEl.checked = !!g.notifyDuelInvites;
   notifyAutomationsEl.checked = !!g.notifyAutomations;
+  verifyWindowEl.checked = !!(g.verifyAlert && g.verifyAlert.openWindow);
+  verifySoundEl.checked = !!(g.verifyAlert && g.verifyAlert.sound);
   renderGeneralDuel(g.duelAccept);
   renderGeneralSell(g.turboSell);
   renderGeneralInvDump(g.invDump);
@@ -888,6 +913,9 @@ semiFocusEl.addEventListener("change", () => updateGeneral({ semiAuto: { focusTa
 semiNotifyEl.addEventListener("change", () => updateGeneral({ semiAuto: { notify: semiNotifyEl.checked } }));
 notifyDuelEl.addEventListener("change", () => updateGeneral({ notifyDuelInvites: notifyDuelEl.checked }));
 notifyAutomationsEl.addEventListener("change", () => updateGeneral({ notifyAutomations: notifyAutomationsEl.checked }));
+verifyWindowEl.addEventListener("change", () => updateGeneral({ verifyAlert: { openWindow: verifyWindowEl.checked } }));
+verifySoundEl.addEventListener("change", () => updateGeneral({ verifyAlert: { sound: verifySoundEl.checked } }));
+$("verifyTest").addEventListener("click", () => browser.runtime.sendMessage({ type: "TEST_VERIFY_SOUND" }).catch(() => {}));
 
 // ---------------------------------------------------------------------------
 // Canais
