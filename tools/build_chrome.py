@@ -10,7 +10,7 @@ extra = os.path.join(ROOT, "chrome")
 if os.path.exists(dst):
     shutil.rmtree(dst)
 os.makedirs(dst)
-for f in ["shared.js", "background.js", "market.js", "protection.js", "shop.js", "kit.js", "invdump.js", "board.js", "upgrade.js", "remedy.js", "content.js",
+for f in ["shared.js", "background.js", "market.js", "protection.js", "shop.js", "kit.js", "invdump.js", "board.js", "upgrade.js", "remedy.js", "chatter.js", "content.js",
           "popup.html", "popup.js", "options.html", "options.js", "options-market.js", "ui.css", "stats.html", "stats.js",
           "browser-polyfill.js"]:
     shutil.copy(os.path.join(src, f), dst)

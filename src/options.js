@@ -687,6 +687,20 @@ function mountFeaturedEditor(host, save) {
   };
 }
 
+function mountRandomChatEditor(host, save) {
+  const pct = (g) => `${Math.round(AT.CHATTER_CHANCES[g] * 100)}%`;
+  const on = checkRow(
+    h("strong", { text: "Mensagens aleatórias no chat" }),
+    `Em canal ativado, deixa o chat mais vivo: uma mensagem neutra a cada 15–90 min (as que chamam para duelo só saem quando dá para duelar); depois de um duelo seu, ${pct("duelWin")} de chance de comentar a vitória ou a derrota; depois de um $pescar seu, comenta a pesca — sem peixe ${pct("fail")}, Comum/Incomum ${pct("low")}, Raro ${pct("rare")}, Lendário/Mítico ${pct("legendary")}, Secreto em diante ${pct("epic")}. Só envia com o campo do chat vazio (nunca apaga o que você estiver digitando).`
+  );
+  on.row.style.marginTop = "0";
+  host.append(on.row);
+  on.cb.addEventListener("change", () => save({ enabled: on.cb.checked }));
+  return function render(next) {
+    on.cb.checked = AT.sanitizeRandomChat(next).enabled;
+  };
+}
+
 function mountInvDumpEditor(host, save) {
   const on = checkRow(
     h("span", {}, h("strong", { text: "Inv Dump" }), " ", h("span", { class: "hint", text: "($vender <espécie> <qtd>)" })),
@@ -799,6 +813,7 @@ const renderGeneralInvDump = mountInvDumpEditor($("generalInvDump"), (patch) => 
 const renderGeneralBoard = mountBoardEditor($("generalBoard"), (patch) => updateGeneral({ autoBoard: patch }));
 const renderGeneralRemedy = mountRemedyEditor($("generalRemedy"), (patch) => updateGeneral({ autoRemedy: patch }));
 const renderGeneralFeatured = mountFeaturedEditor($("generalFeatured"), (patch) => updateGeneral({ autoFeatured: patch }));
+const renderGeneralRandomChat = mountRandomChatEditor($("generalRandomChat"), (patch) => updateGeneral({ randomChat: patch }));
 const renderGeneralUpgrade = mountUpgradeEditor(
   $("generalUpgrade"),
   (patch) => updateGeneral({ autoUpgrade: patch }),
@@ -836,6 +851,7 @@ function renderGeneral() {
   renderGeneralBoard(g.autoBoard);
   renderGeneralRemedy(g.autoRemedy);
   renderGeneralFeatured(g.autoFeatured);
+  renderGeneralRandomChat(g.randomChat);
   renderGeneralUpgrade(g.autoUpgrade, AT.sanitizeShopList(g.shopList).reserve);
   renderGeneralProtect(g.protection);
   renderGeneralShop(g.shopList);
@@ -985,7 +1001,8 @@ function createCard(name) {
     ["invDump", "invdump", mountInvDumpEditor],
     ["autoBoard", "board", mountBoardEditor],
     ["autoRemedy", "remedy", mountRemedyEditor],
-    ["autoFeatured", "featured", mountFeaturedEditor]
+    ["autoFeatured", "featured", mountFeaturedEditor],
+    ["randomChat", "chatter", mountRandomChatEditor]
   ]) {
     const def = q(`.js-${cls}-default`);
     const hostEl = q(`.js-${cls}-host`);
@@ -1128,7 +1145,8 @@ function renderCard(name) {
     ["invDump", "invdump", AT.describeInvDump, AT.sanitizeInvDump],
     ["autoBoard", "board", AT.describeAutoBoard, AT.sanitizeAutoBoard],
     ["autoRemedy", "remedy", AT.describeAutoRemedy, AT.sanitizeAutoRemedy],
-    ["autoFeatured", "featured", AT.describeAutoFeatured, AT.sanitizeAutoFeatured]
+    ["autoFeatured", "featured", AT.describeAutoFeatured, AT.sanitizeAutoFeatured],
+    ["randomChat", "chatter", AT.describeRandomChat, AT.sanitizeRandomChat]
   ]) {
     els[`${cls}Default`].checked = !s[key];
     els[`${cls}Summary`].textContent = describe(sanitize(g[key]));

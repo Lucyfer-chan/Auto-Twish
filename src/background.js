@@ -782,16 +782,19 @@ const lastChatAt = new Map(); // canal -> horario do ultimo comando enviado
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // gap: false = sem o intervalo aleatorio (ex: Protecao, que deve ser imediata).
+// onlyIfEmpty: so envia se o campo do chat estiver vazio (mensagens
+// aleatorias: nunca apagam o que o jogador estiver digitando).
 // Os comandos continuam saindo um por vez.
-function attemptSend(channel, text = FIXED_MESSAGE, { gap = true } = {}) {
+function attemptSend(channel, text = FIXED_MESSAGE, { gap = true, onlyIfEmpty = false } = {}) {
   const run = chatChain.then(async () => {
     if (gap) {
       const last = lastChatAt.get(channel) || 0;
       const wait = last + CHAT_MIN_GAP_MS + Math.random() * CHAT_GAP_JITTER_MS - Date.now();
       if (wait > 0) await sleep(wait);
     }
-    const r = await sendChatNow(channel, text);
+    const r = await sendChatNow(channel, text, { onlyIfEmpty });
     if (r.ok) lastChatAt.set(channel, Date.now());
+    if (r.ok && text === FIXED_MESSAGE && typeof noteCastForChatter === "function") noteCastForChatter(channel);
     return r;
   });
   chatChain = run.catch(() => {});
@@ -799,10 +802,10 @@ function attemptSend(channel, text = FIXED_MESSAGE, { gap = true } = {}) {
 }
 
 // Comando de uma automacao: espera um pouco (reacao "humana") e entra na fila.
-async function enqueueCommand(channel, text, { delayMs = 0, reason = "", gap = true } = {}) {
+async function enqueueCommand(channel, text, { delayMs = 0, reason = "", gap = true, onlyIfEmpty = false } = {}) {
   if (delayMs > 0) await sleep(delayMs);
   if (safetyLocked) return { ok: false, reason: "verificacao-pendente" };
-  const r = await attemptSend(channel, text, { gap });
+  const r = await attemptSend(channel, text, { gap, onlyIfEmpty });
   console.log(`${AT.LOG_PREFIX} [fila] "${text}" em "${channel}"${reason ? ` (${reason})` : ""}: ${r.ok ? "enviado" : `falhou (${r.reason})`}.`);
   return r;
 }
@@ -816,7 +819,7 @@ async function enqueueCommand(channel, text, { delayMs = 0, reason = "", gap = t
 // continua usando o content script, que la funciona.
 // A funcao abaixo e serializada e roda na pagina: nao pode usar nada de fora.
 // ---------------------------------------------------------------------------
-function pageChatAction(text, sendIt) {
+function pageChatAction(text, sendIt, onlyIfEmpty) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const fieldText = (el) => (el.innerText || el.textContent || "").trim();
   const findInput = () => {
@@ -847,6 +850,8 @@ function pageChatAction(text, sendIt) {
         const cur = fieldText(input);
         if (cur === text) return { ok: true, typed: true };
         if (cur !== "") return { ok: true, typed: false }; // rascunho do jogador: nao mexe
+      } else if (onlyIfEmpty && fieldText(input) !== "") {
+        return { ok: false, reason: "campo-ocupado" }; // rascunho do jogador: nao apaga
       }
       for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
         input.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
@@ -886,14 +891,14 @@ function pageChatAction(text, sendIt) {
 }
 
 // Envia (SEND_CHAT_MESSAGE) ou so digita (TYPE_CHAT_MESSAGE) numa aba.
-async function chatInTab(tabId, type, text) {
+async function chatInTab(tabId, type, text, { onlyIfEmpty = false } = {}) {
   if (AT.browserName() === "Chrome") {
     try {
       const res = await browser.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
         func: pageChatAction,
-        args: [text, type === "SEND_CHAT_MESSAGE"]
+        args: [text, type === "SEND_CHAT_MESSAGE", !!onlyIfEmpty]
       });
       const r = res && res[0] && res[0].result;
       if (r) return r;
@@ -901,14 +906,14 @@ async function chatInTab(tabId, type, text) {
       console.warn(`${AT.LOG_PREFIX} Falha ao digitar pela pagina; tentando pelo content script:`, e);
     }
   }
-  return browser.tabs.sendMessage(tabId, { type, text });
+  return browser.tabs.sendMessage(tabId, { type, text, onlyIfEmpty: !!onlyIfEmpty });
 }
 
 // Tenta enviar a mensagem pra(s) aba(s) do canal e reporta se o
 // content.js confirmou que o texto foi digitado e o envio foi disparado.
 // NAO confirma que o TwishGameBot de fato respondeu — so que o envio
 // local (Twitch) funcionou. Use attemptSend (fila), nunca esta direto.
-async function sendChatNow(channel, text) {
+async function sendChatNow(channel, text, { onlyIfEmpty = false } = {}) {
   if (safetyLocked) return { ok: false, reason: "verificacao-pendente" };
   const tabs = await browser.tabs.query({ url: "*://*.twitch.tv/*" });
   const targets = tabs.filter((t) => extractChannelFromUrl(t.url) === channel);
@@ -923,7 +928,7 @@ async function sendChatNow(channel, text) {
 
   for (const tab of targets) {
     try {
-      const result = await chatInTab(tab.id, "SEND_CHAT_MESSAGE", text);
+      const result = await chatInTab(tab.id, "SEND_CHAT_MESSAGE", text, { onlyIfEmpty });
       if (result?.ok) {
         anyOk = true;
       } else {
@@ -976,6 +981,7 @@ async function applyChannelSettings(channel, patch) {
       ["autoBoard", AT.effectiveAutoBoard, (a, b) => mergeAutoBoard(a, b)],
       ["autoUpgrade", AT.effectiveAutoUpgrade, (a, b) => mergeAutoUpgrade(a, b)],
       ["autoFeatured", AT.effectiveAutoFeatured, (a, b) => AT.sanitizeAutoFeatured({ ...a, ...b })],
+      ["randomChat", AT.effectiveRandomChat, (a, b) => AT.sanitizeRandomChat({ ...a, ...b })],
       ["autoRemedy", AT.effectiveAutoRemedy, (a, b) => AT.sanitizeAutoRemedy({ ...a, ...b })]
     ]) {
       if (key in patch) s[key] = patch[key] === null ? null : merge(eff(previous, stateCache && stateCache.general), patch[key]);
@@ -1623,7 +1629,7 @@ function duelCooldownMs(ds) {
   return ds && ds.cooldownSec ? ds.cooldownSec * 1000 : AT.DUEL_COOLDOWN_MS;
 }
 
-async function onDuelEnd(channel, mentions) {
+async function onDuelEnd(channel, mentions, text = "") {
   const general = await getGeneralSettings();
   const me = general.twishLogin;
   if (!me || !mentions.some((m) => m.toLowerCase() === me)) return; // duelo de outras pessoas
@@ -1640,6 +1646,7 @@ async function onDuelEnd(channel, mentions) {
   console.log(`${AT.LOG_PREFIX} Duelo terminou em "${channel}" (${mentions.join(", ")}); proximo duelo as ${new Date(until).toLocaleTimeString()}.`);
   logActivity(channel, "duelo", `Duelo terminou (${mentions.map((x) => "@" + x).join(", ")}); próximo duelo às ${new Date(until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`);
   if (typeof onDuelFinished === "function") await onDuelFinished(channel);
+  if (typeof onDuelEndForChatter === "function") onDuelEndForChatter(channel, text).catch((e) => console.warn(`${AT.LOG_PREFIX} Falha na reacao ao duelo:`, e));
 }
 
 // O jogador mandou um comando que nao e o de pesca (ex: $aceitar, entrar em
@@ -2084,6 +2091,7 @@ async function heartbeatTick() {
   if (Object.values(channels).some((s) => s && s.enabled && s.mode === "auto")) {
     await syncAllTwishTabs();
   }
+  if (typeof ensureChatterAlarms === "function") await ensureChatterAlarms().catch((e) => console.warn(`${AT.LOG_PREFIX} Falha nos alarmes das mensagens aleatorias:`, e));
   for (const [channel, settings] of Object.entries(channels)) {
     if (settings.enabled) {
       await processChannelIfDue(channel, "heartbeat");
@@ -2247,6 +2255,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (patch.autoBoard) g.autoBoard = mergeAutoBoard(g.autoBoard, patch.autoBoard);
         if (patch.autoUpgrade) g.autoUpgrade = mergeAutoUpgrade(g.autoUpgrade, patch.autoUpgrade);
         if (patch.autoFeatured) g.autoFeatured = AT.sanitizeAutoFeatured({ ...g.autoFeatured, ...patch.autoFeatured });
+        if (patch.randomChat) g.randomChat = AT.sanitizeRandomChat({ ...g.randomChat, ...patch.randomChat });
         if (patch.autoRemedy) g.autoRemedy = AT.sanitizeAutoRemedy({ ...g.autoRemedy, ...patch.autoRemedy });
         if (patch.protection) g.protection = AT.sanitizeProtection({ ...g.protection, ...patch.protection });
         if (patch.shopList) g.shopList = AT.sanitizeShopList({ ...g.shopList, ...patch.shopList });
@@ -2310,7 +2319,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const channel = extractChannelFromUrl(sender?.tab?.url || "");
     if (!channel) return false;
     if (msg.type === "CHAT_FEATURED_FISH" && msg.fish) onFeaturedFish(channel, String(msg.fish).slice(0, 60));
-    if (msg.type === "CHAT_DUEL_END" && Array.isArray(msg.mentions)) onDuelEnd(channel, msg.mentions.slice(0, 10).map(String));
+    if (msg.type === "CHAT_DUEL_END" && Array.isArray(msg.mentions)) onDuelEnd(channel, msg.mentions.slice(0, 10).map(String), String(msg.text || "").slice(0, 500));
     if (msg.type === "CHAT_DUEL_INVITE" && msg.challenger && msg.target) {
       onDuelInvite(channel, String(msg.challenger), String(msg.target), Math.max(1, Number(msg.windowSeconds) || 300));
     }
@@ -2370,6 +2379,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const channel = extractChannelFromUrl(sender?.tab?.url || "");
     if (channel && msg.text === FIXED_MESSAGE) {
       recordUserSent(channel);
+      if (typeof noteCastForChatter === "function") noteCastForChatter(channel);
       if (typeof scheduleInvDump === "function") scheduleInvDump(channel);
       if (typeof noteFishForBoarding === "function") noteFishForBoarding(channel);
       if (typeof scheduleProtectAfterCatch === "function") scheduleProtectAfterCatch(channel);

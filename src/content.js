@@ -100,7 +100,9 @@ async function insertChatText(input, text) {
 // disparar o envio. Retorna { ok: true } so quando tudo foi confirmado
 // localmente — isso NAO garante que o TwishGameBot respondeu, so que a
 // mensagem foi digitada e o envio foi disparado nesta aba.
-async function typeAndSend(text) {
+// onlyIfEmpty: so envia se o campo estiver vazio (mensagens aleatorias nunca
+// apagam o que o jogador estiver digitando).
+async function typeAndSend(text, { onlyIfEmpty = false } = {}) {
   if (sendInProgress) {
     console.warn("[Auto Twish] Ja existe um envio em andamento nesta aba; ignorando chamada concorrente.");
     return { ok: false, reason: "already-sending" };
@@ -113,6 +115,7 @@ async function typeAndSend(text) {
       console.warn("[Auto Twish] Campo de chat nao encontrado nesta pagina.");
       return { ok: false, reason: "input-not-found" };
     }
+    if (onlyIfEmpty && fieldText(input) !== "") return { ok: false, reason: "campo-ocupado" };
 
     const focused = focusEditor(input);
     if (!focused) {
@@ -225,7 +228,7 @@ document.addEventListener(
 
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "SEND_CHAT_MESSAGE" && typeof msg.text === "string") {
-    typeAndSend(msg.text).then((result) => sendResponse(result));
+    typeAndSend(msg.text, { onlyIfEmpty: !!msg.onlyIfEmpty }).then((result) => sendResponse(result));
     return true; // resposta assincrona
   }
   if (msg?.type === "TYPE_CHAT_MESSAGE" && typeof msg.text === "string") {
@@ -239,6 +242,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 //   - "Peixe em destaque: matrinxã. Pescou um? ..."            -> peixe em destaque
 //   - "@fulano desafiou @voce pra um duelo! @voce tem 5m0s ..." -> convite de duelo
 //   - "@a venceu o duelo [por W.O.] contra @b ..." (ou derrota/empate) -> fim de duelo
+//   - qualquer outra mensagem que marque o jogador -> CHAT_BOT_MENTION (o
+//     background usa a resposta ao $pescar para as mensagens aleatorias)
 // Observa so a lista de mensagens do chat (sem subarvore), entao o custo e
 // uma checagem curta por mensagem nova.
 // ---------------------------------------------------------------------------
@@ -274,10 +279,25 @@ function chatLineText(node) {
   return ((body || node).innerText || (body || node).textContent || "").trim();
 }
 
+// Login do jogador no Twish (lido pelo background e guardado nas
+// configuracoes gerais): so as mensagens do bot que o marcam sao repassadas
+// como CHAT_BOT_MENTION.
+let myTwishLogin = null;
+browser.storage.local
+  .get("general")
+  .then(({ general }) => {
+    myTwishLogin = (general && general.twishLogin) || null;
+  })
+  .catch(() => {});
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.general) myTwishLogin = (changes.general.newValue && changes.general.newValue.twishLogin) || null;
+});
+
 function handleChatLine(node) {
   if (!(node instanceof Element)) return;
   if (chatLineAuthor(node) !== AT.GAME_BOT) return;
   const text = chatLineText(node);
+  let special = false; // verificacao/torneio: nao e resposta de pesca
 
   // Verificacao anti-bot: o texto exato ainda nao e conhecido, entao qualquer
   // mensagem do bot que fale de verificacao faz o background conferir a API.
@@ -285,12 +305,14 @@ function handleChatLine(node) {
     const mentions = [...text.matchAll(/@(\w+)/g)].map((m) => m[1]);
     const link = /twish\.com\.br\/verificacao/i.test(text);
     browser.runtime.sendMessage({ type: "CHAT_VERIFICATION_HINT", mentions, link }).catch(() => {});
+    special = true;
   }
 
   // Torneio: qualquer mensagem do bot sobre torneio que cite $entrar faz o
   // background conferir a API do torneio na hora (o formato exato nao importa).
   if (/torneio/i.test(text) && /\$(entrar|join)\b/i.test(text)) {
     browser.runtime.sendMessage({ type: "CHAT_TOURNAMENT_HINT" }).catch(() => {});
+    special = true;
   }
 
   const opened = EXPEDITION_OPEN_RE.exec(text);
@@ -337,7 +359,7 @@ function handleChatLine(node) {
 
   if (DUEL_WORD_RE.test(text) && DUEL_RESULT_RE.test(text) && !/desafiou/i.test(text)) {
     const mentions = [...text.matchAll(/@(\w+)/g)].map((m) => m[1]);
-    browser.runtime.sendMessage({ type: "CHAT_DUEL_END", mentions }).catch(() => {});
+    browser.runtime.sendMessage({ type: "CHAT_DUEL_END", mentions, text: text.slice(0, 500) }).catch(() => {});
     return;
   }
 
@@ -347,6 +369,12 @@ function handleChatLine(node) {
     browser.runtime
       .sendMessage({ type: "CHAT_DUEL_INVITE", challenger: duel[1], target: duel[2], windowSeconds })
       .catch(() => {});
+    return;
+  }
+
+  // Outra mensagem do bot marcando o jogador (ex: resultado do $pescar).
+  if (!special && myTwishLogin && AT.mentionsLogin(text, myTwishLogin)) {
+    browser.runtime.sendMessage({ type: "CHAT_BOT_MENTION", text: text.slice(0, 500) }).catch(() => {});
   }
 }
 

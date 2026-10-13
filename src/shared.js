@@ -81,6 +81,9 @@ AT.DEFAULT_GENERAL_SETTINGS = {
   autoFeatured: { enabled: false },
   // Remedios: cura Canto da Sereia (Alga medicinal) e Maldicao (Agua benta).
   autoRemedy: null, // preenchido por AT.sanitizeAutoRemedy
+  // Mensagens aleatorias no chat (neutras de tempos em tempos; reacoes depois
+  // de duelo e de pesca). Ver chatter.js.
+  randomChat: { enabled: false },
   // Protecao automatica (Road Map item 7): mantem estas especies na whitelist
   // do jogo ($whitelist) em cada barco. So adiciona; nunca remove.
   protection: {
@@ -451,6 +454,160 @@ AT.describeAutoFeatured = function (c) {
   return c.enabled ? "ligado, 1x por dia" : "desligado";
 };
 
+// ---------------------------------------------------------------------------
+// Mensagens aleatorias no chat (chatter.js)
+// ---------------------------------------------------------------------------
+AT.sanitizeRandomChat = function (x) {
+  const o = x && typeof x === "object" ? x : {};
+  return { enabled: !!o.enabled };
+};
+AT.effectiveRandomChat = function (s, g) {
+  return AT.sanitizeRandomChat((s && s.randomChat) || (g || AT.DEFAULT_GENERAL_SETTINGS).randomChat);
+};
+AT.describeRandomChat = function (c) {
+  return c.enabled ? "ligado" : "desligado";
+};
+
+// Neutras: uma a cada 15–90 min (sorteado de novo a cada vez), por canal.
+AT.CHATTER_NEUTRAL_MIN_MS = 15 * 60 * 1000;
+AT.CHATTER_NEUTRAL_MAX_MS = 90 * 60 * 1000;
+
+// Listas de mensagens. Para mudar o que a extensao fala, edite aqui.
+AT.CHATTER_MESSAGES = {
+  neutral: ["Kappa", "duelo?", "duelo alguem?", "bora duelo?"],
+  duelLoss: ["droga...", "GRRR", "na próxima eu ganho", "gg", "bom duelo"],
+  duelWin: ["gg", "bom duelo", "get gud", "mais sorte na próxima", "FeelsOkayMan", "PogChamp", "FeelsGoodMan"],
+  fail: ["FeelsBadMan", "puts", "nunca pesco nada", "droga...", "a nem viu..."],
+  low: ["melhor que nada", "pelo menos veio algo", "meh", "já é alguma coisa", "PogChamp"], // Comum e Incomum
+  rare: ["Pog", "FeelsOkayMan", "PogChamp", "nice"], // Raro
+  legendary: ["Poggers", "FeelsGoodMan", "PogChamp", "very nice", "gg"], // Lendario e Mitico
+  epic: ["POGGERS", "FeelsAmazingMan", "PogChamp", "WOW", "UAU", "caralhoooo", "EZ Fishh"] // Secreto em diante
+};
+// Chance de reagir (0 a 1).
+AT.CHATTER_CHANCES = { duelLoss: 0.5, duelWin: 0.5, fail: 0.2, low: 0.25, rare: 0.5, legendary: 0.75, epic: 1 };
+// Raridade do peixe -> lista.
+AT.CHATTER_TIER_GROUP = {
+  common: "low",
+  uncommon: "low",
+  rare: "rare",
+  legendary: "legendary",
+  mythic: "legendary",
+  secret: "epic",
+  divine: "epic",
+  ancient_god: "epic"
+};
+AT.CHATTER_GROUP_LABELS = {
+  neutral: "neutra",
+  duelLoss: "derrota no duelo",
+  duelWin: "vitória no duelo",
+  fail: "pesca sem peixe",
+  low: "peixe Comum/Incomum",
+  rare: "peixe Raro",
+  legendary: "peixe Lendário/Mítico",
+  epic: "peixe Secreto ou mais raro"
+};
+// Mensagens neutras que chamam para duelo (nao saem quando nao da para duelar).
+AT.CHATTER_DUEL_MSG_RE = /duelo/i;
+
+// Sem acentos e em minusculas (para comparar textos do bot).
+AT.normalizeText = function (s) {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+};
+
+// O texto marca o jogador (@login ou o login como palavra)?
+AT.mentionsLogin = function (text, login) {
+  if (!login) return false;
+  const esc = String(login).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9_])@?${esc}($|[^a-z0-9_])`, "i").test(String(text || ""));
+};
+
+// Resultado de um duelo para o jogador: "win", "loss" ou null (empate/desconhecido).
+// "@a venceu o duelo contra @b" -> vence quem foi marcado logo antes de "venceu";
+// "@a perdeu o duelo para @b" -> perde quem foi marcado logo antes de "perdeu".
+AT.duelOutcome = function (text, login) {
+  const t = AT.normalizeText(text);
+  const me = String(login || "").toLowerCase();
+  if (!me || /\bempat/.test(t)) return null;
+  const lastMentionBefore = (re) => {
+    const m = re.exec(t);
+    if (!m) return null;
+    const before = [...t.slice(0, m.index).matchAll(/@(\w+)/g)];
+    return before.length ? before[before.length - 1][1] : null;
+  };
+  const winner = lastMentionBefore(/\bvenceu\b/);
+  if (winner) return winner === me ? "win" : "loss";
+  const loser = lastMentionBefore(/\bperdeu\b/);
+  if (loser) return loser === me ? "loss" : "win";
+  return null;
+};
+
+// Resposta do bot ao $pescar do jogador.
+//   species = [{ name, tier }] (bestiario do Twish), opcional.
+// Devolve { kind: "catch", tier, species? } | { kind: "fail" } |
+//         { kind: "other" } (resposta que nao e de pesca, ex: cooldown) | null (nao reconhecida).
+AT.CHATTER_TIER_WORDS = [
+  ["ancient_god", /\b(deus(es)? ancia(o|os|oes)|ancia(o|os|oes))\b/],
+  ["divine", /\bdivin[oa]s?\b/],
+  ["secret", /\bsecret[oa]s?\b/],
+  ["mythic", /\bmitic[oa]s?\b/],
+  ["legendary", /\blendari[oa]s?\b/],
+  ["rare", /\brar[oa]s?\b/],
+  ["uncommon", /\bincomu(m|ns)\b/],
+  ["common", /\bcomu(m|ns)\b/]
+];
+// Nunca e resposta de pesca (venda, whitelist, compra, item...), mesmo citando um peixe.
+AT.CHATTER_NOT_CAST_RE = /\b(vend(eu|ido|idos|ida|idas)|whitelist|protegid\w*|compr(ou|ado|ada|ados|adas)|anunci\w*|equip(ou|ad[oa]s?)|ativ(ou|ad[oa]))\b/;
+// Peixe escapou: falha, mesmo citando o peixe.
+AT.CHATTER_ESCAPED_RE = /\b(escap\w*|fugiu|fugiram|soltou|arrebent\w*)\b/;
+// Pesca sem peixe.
+AT.CHATTER_FAIL_RE = /\b(nada|nenhum peixe|sem peixe|nao (pescou|fisgou|pegou|mordeu|veio)|ninguem mordeu|vazi[oa]s?|linha (partiu|quebrou))\b/;
+// Respostas que nao sao de pesca (cooldown, mochila cheia...), quando nao cita peixe.
+AT.CHATTER_OTHER_RE = /\b(aguard\w*|esper\w*|cooldown|recarreg\w*|faltam?|daqui a|ainda nao|so (pode|da)|cheia|cheio|mochila|inventario|verific\w*|torneio|expedic\w*|duelo)\b/;
+
+AT.compileSpecies = function (species) {
+  const out = [];
+  for (const f of Array.isArray(species) ? species : []) {
+    const n = AT.normalizeText(f && f.name).trim();
+    if (n.length < 3 || !AT.TIERS.includes(f.tier)) continue;
+    const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    out.push({ name: f.name, tier: f.tier, len: n.length, re: new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`) });
+  }
+  return out.sort((a, b) => b.len - a.len); // nome mais longo primeiro ("Tucunare Azul" antes de "Tucunare")
+};
+
+AT.classifyCastReply = function (text, compiledSpecies) {
+  const t = AT.normalizeText(text).replace(/sorte\s+rara/g, " ");
+  if (AT.CHATTER_NOT_CAST_RE.test(t)) return { kind: "other" };
+  let tier = null;
+  let species = null;
+  for (const f of compiledSpecies || []) {
+    if (f.re.test(t)) {
+      tier = f.tier;
+      species = f.name;
+      break;
+    }
+  }
+  if (!tier) {
+    const w = AT.CHATTER_TIER_WORDS.find(([, re]) => re.test(t));
+    if (w) tier = w[0];
+  }
+  if (tier) {
+    if (AT.CHATTER_ESCAPED_RE.test(t)) return { kind: "fail" };
+    return species ? { kind: "catch", tier, species } : { kind: "catch", tier };
+  }
+  if (AT.CHATTER_ESCAPED_RE.test(t)) return { kind: "fail" };
+  if (AT.CHATTER_OTHER_RE.test(t)) return { kind: "other" };
+  if (AT.CHATTER_FAIL_RE.test(t)) return { kind: "fail" };
+  return null;
+};
+
+// Sorteia uma mensagem da lista, nunca repetindo a ultima (o chat da Twitch
+// costuma bloquear mensagens identicas seguidas). null = nada a enviar.
+AT.pickChatterMessage = function (list, last, rnd = Math.random) {
+  const pool = (list || []).filter((m) => m && m !== last);
+  return pool.length ? pool[Math.floor(rnd() * pool.length)] : null;
+};
+
 // Remedios (efeitos ruins da expedicao, por barco)
 AT.REMEDIES = {
   siren: { item: "alga_medicinal", name: "Alga medicinal", effect: "Canto da Sereia", field: "siren_remaining" },
@@ -687,6 +844,7 @@ AT.mergeGeneral = function (saved) {
     autoUpgrade: AT.sanitizeAutoUpgrade(g.autoUpgrade),
     autoFeatured: AT.sanitizeAutoFeatured(g.autoFeatured),
     autoRemedy: AT.sanitizeAutoRemedy(g.autoRemedy),
+    randomChat: AT.sanitizeRandomChat(g.randomChat),
     protection: AT.sanitizeProtection(g.protection),
     shopList: AT.sanitizeShopList(g.shopList),
     eventKit: AT.sanitizeEventKit(g.eventKit),
@@ -715,6 +873,7 @@ AT.DEFAULT_CHANNEL_SETTINGS = {
   autoUpgrade: null, // idem
   autoFeatured: null, // idem
   autoRemedy: null, // idem
+  randomChat: null, // idem
   protection: null, // idem
   shopList: null, // idem
   eventKit: null, // idem

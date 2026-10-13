@@ -1,4 +1,4 @@
-# Auto Twish — v 1.0.5
+# Auto Twish — v 1.0.6
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -201,6 +201,42 @@ mesma exceção de ativar itens). Sem o remédio, compra pelo chat se "comprar s
 não tiver" estiver ligado. Confere depois de cada pesca, a cada 10 min e
 quando uma expedição termina. Geral + exceção por canal.
 
+## Mensagens aleatórias no chat (desligado por padrão)
+
+Deixa a conta mais "viva" no chat, com mensagens curtas que variam. Liga em
+"Automações — padrão geral" → **Mensagens aleatórias no chat**; cada canal pode
+ter uma exceção própria no seu cartão. Só age em canal **ativado** e com a aba
+do canal na Twitch aberta.
+
+| Quando | Chance | Mensagens |
+|--------|--------|-----------|
+| De tempos em tempos (15–90 min, sorteado a cada vez) | sempre | `Kappa`, `duelo?`, `duelo alguem?`, `bora duelo?` |
+| Duelo seu terminou — derrota | 50% | `droga...`, `GRRR`, `na próxima eu ganho`, `gg`, `bom duelo` |
+| Duelo seu terminou — vitória | 50% | `gg`, `bom duelo`, `get gud`, `mais sorte na próxima`, `FeelsOkayMan`, `PogChamp`, `FeelsGoodMan` |
+| Pesca sem peixe | 20% | `FeelsBadMan`, `puts`, `nunca pesco nada`, `droga...`, `a nem viu...` |
+| Peixe Comum ou Incomum | 25% | `melhor que nada`, `pelo menos veio algo`, `meh`, `já é alguma coisa`, `PogChamp` |
+| Peixe Raro | 50% | `Pog`, `FeelsOkayMan`, `PogChamp`, `nice` |
+| Peixe Lendário ou Mítico | 75% | `Poggers`, `FeelsGoodMan`, `PogChamp`, `very nice`, `gg` |
+| Peixe Secreto, Divino ou Deuses Anciões | 100% | `POGGERS`, `FeelsAmazingMan`, `PogChamp`, `WOW`, `UAU`, `caralhoooo`, `EZ Fishh` |
+
+- **Pesca**: depois de um `$pescar` seu (da extensão ou digitado por você), a
+  primeira resposta do TwishGameBot que te marca (até 20 s) é lida como o
+  resultado. A raridade vem do nome da espécie na mensagem (bestiário público
+  do Twish) ou, sem ele, da palavra da raridade ("Raro", "Lendário"…). Resposta
+  que não dá para entender não gera mensagem e fica registrada em
+  "Atividades recentes" (tipo "mensagens") — útil para ajustar a leitura.
+- **Duelo**: lido da mensagem de fim de duelo (quem foi marcado antes de
+  "venceu"/"perdeu"). Empate não tem reação.
+- **Neutras**: as que chamam para duelo não saem quando não dá para duelar (CD
+  de duelo, convite pendente, duelos desligados no canal ou em expedição).
+- A reação sai 2–8 s depois da mensagem do bot, pela fila de comandos; no
+  máximo 1 mensagem aleatória a cada 20 s por canal, nunca a mesma duas vezes
+  seguidas (o chat da Twitch bloqueia repetidas).
+- Só envia com o **campo do chat vazio**: nunca apaga o que você estiver
+  digitando nem o `$pescar` do semi-automático. Para durante a verificação.
+- As listas e as chances ficam em `shared.js` (`AT.CHATTER_MESSAGES`,
+  `AT.CHATTER_CHANCES`, `AT.CHATTER_TIER_GROUP`); a lógica, em `chatter.js`.
+
 ## Mercado — aquisição automática
 
 Na página de configurações, seção "Mercado". Desligada por padrão.
@@ -354,7 +390,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 1.0.5 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 1.0.6 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -424,6 +460,10 @@ o código pronto caso um dia se queira rodar em Chromium.
   ajuda a evitar isso.
 
 ## Histórico de versões
+
+- **v 1.0.6** — Mensagens aleatórias no chat (desligado por padrão; geral +
+  exceção por canal): neutras a cada 15–90 min e reações depois de duelo e de
+  pesca, com chance por raridade. Só envia com o campo do chat vazio.
 
 - **v 1.0.5** — Compras dos eventos e do torneio conferem preço, saldo e a
   Reserva de moedas antes do `$comprar`; Sorte Rara com compra automática da
