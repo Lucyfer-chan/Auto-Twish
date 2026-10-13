@@ -2222,12 +2222,22 @@ async function checkForUpdate(source) {
 }
 async function setupUpdateCheck() {
   if (!AT.UPDATE_REPO) return;
-  if (!(await browser.alarms.get(UPDATE_ALARM_NAME))) await browser.alarms.create(UPDATE_ALARM_NAME, { periodInMinutes: AT.UPDATE_CHECK_HOURS * 60 });
+  const al = await browser.alarms.get(UPDATE_ALARM_NAME);
+  // (re)cria o alarme se nao existir ou se o intervalo mudou (antes da 1.0.8 era de 6 h)
+  if (!al || al.periodInMinutes !== AT.UPDATE_CHECK_HOURS * 60) await browser.alarms.create(UPDATE_ALARM_NAME, { periodInMinutes: AT.UPDATE_CHECK_HOURS * 60 });
   const { update } = await browser.storage.local.get("update");
   if (!update || Date.now() - (update.checkedAt || 0) > 60 * 60 * 1000) await checkForUpdate("inicio");
 }
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === UPDATE_ALARM_NAME) checkForUpdate("alarme");
+});
+// Popup aberto: confere de novo se a ultima conferencia tiver mais de 10 min.
+browser.runtime.onMessage.addListener((msg) => {
+  if (msg?.type !== "CHECK_UPDATE_IF_STALE") return;
+  (async () => {
+    const { update } = await browser.storage.local.get("update");
+    if (!update || Date.now() - (update.checkedAt || 0) > AT.UPDATE_POPUP_STALE_MS) await checkForUpdate("popup");
+  })().catch(() => {});
 });
 
 // ---------------------------------------------------------------------------

@@ -450,6 +450,8 @@ async function renderUpdate() {
 }
 renderAccess();
 renderUpdate();
+// Confere versão nova ao abrir (o background só consulta se a última conferência tiver mais de 10 min).
+browser.runtime.sendMessage({ type: "CHECK_UPDATE_IF_STALE" }).catch(() => {});
 $("gear").addEventListener("click", openOptions);
 
 async function getActiveTabUrl() {

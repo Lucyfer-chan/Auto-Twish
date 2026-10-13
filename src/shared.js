@@ -634,7 +634,8 @@ AT.describeAutoRemedy = function (c) {
 // Vazio = aviso desligado (o repositorio ainda nao foi criado).
 // ---------------------------------------------------------------------------
 AT.UPDATE_REPO = "Lucyfer-chan/Auto-Twish"; // "dono/repositorio"
-AT.UPDATE_CHECK_HOURS = 6;
+AT.UPDATE_CHECK_HOURS = 1; // e ao abrir o popup, se a ultima conferencia tiver mais de 10 min
+AT.UPDATE_POPUP_STALE_MS = 10 * 60 * 1000;
 // "v 1.0.4", "v1.0.4", "1.0.4" -> [1, 0, 4]; null se nao for uma versao.
 AT.parseVersion = function (s) {
   const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(s || ""));

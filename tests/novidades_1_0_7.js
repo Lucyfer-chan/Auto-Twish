@@ -10,6 +10,7 @@ window.__sent=[];document.getElementById('send').addEventListener('click',()=>{c
 let EVENTS = { event: null, grande_evento: null };
 let ACTIVE = {};
 let CD = 300;
+let GH = 0; // consultas as tags do GitHub
 const out = [];
 (async () => {
   const ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(require('os').tmpdir(), 'autotwish-')), { channel: 'chromium', headless: true, args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`] });
@@ -17,6 +18,7 @@ const out = [];
   await ctx.route('**/*', async (route) => {
     const u = new URL(route.request().url()); const p = u.pathname;
     if (u.hostname.endsWith('twitch.tv')) return route.fulfill({ contentType: 'text/html', body: TWITCH_HTML });
+    if (u.hostname === 'api.github.com') { GH++; return route.fulfill({ json: [{ name: '9.9.9' }, { name: '1.0.0' }] }); }
     if (!u.hostname.endsWith('twish.com.br')) return route.continue();
     if (p.endsWith('/me')) return route.fulfill({ json: { channel: 'foo', login: 'jogador_teste', cooldown_remaining: CD, twishcoins: 100, equipment: { rod_id: 'vara_aco' }, owned: {}, active: ACTIVE } });
     if (p === '/api/me/challenge') return route.fulfill({ json: { state: 'none' } });
@@ -70,6 +72,18 @@ const out = [];
   ACTIVE = {};
   await sw.evaluate(() => fetchTwishMe('foo'));
   out.push(`  Turbo acabou -> atrasos sorteados: ${JSON.stringify(await many())}`);
+  // 3) versao nova: ao abrir o popup (se a ultima conferencia tiver mais de 10 min) e a cada 1 h
+  const extId = sw.url().split('/')[2];
+  out.push(`3 alarme de versão nova: a cada ${await sw.evaluate(async () => { await setupUpdateCheck(); return (await browser.alarms.get(UPDATE_ALARM_NAME)).periodInMinutes; })} min`);
+  await sw.evaluate(() => browser.storage.local.set({ update: { checkedAt: Date.now() - 2 * 60000, latest: null } }));
+  GH = 0;
+  let pop = await ctx.newPage(); await pop.goto(`chrome-extension://${extId}/popup.html`); await sleep(1500);
+  out.push(`  popup aberto, última conferência há 2 min -> consultas ao GitHub: ${GH} | aviso visível: ${await pop.locator('#updateLine').isVisible()}`);
+  await pop.close();
+  await sw.evaluate(() => browser.storage.local.set({ update: { checkedAt: Date.now() - 11 * 60000, latest: null } }));
+  pop = await ctx.newPage(); await pop.goto(`chrome-extension://${extId}/popup.html`); await sleep(2000);
+  out.push(`  popup aberto, última conferência há 11 min -> consultas ao GitHub: ${GH} | aviso: "${(await pop.textContent('#updateLine')).trim()}" (visível: ${await pop.locator('#updateLine').isVisible()})`);
+  await pop.close();
   // o teste injeta de proposito numa aba com o leitor ativo: os avisos de "ja declarado" sao esperados la
   const real = errors.filter((e) => !/already been declared/.test(e));
   out.push(`erros nas paginas: ${real.length ? real.join(' | ') : 'nenhum'}`);
