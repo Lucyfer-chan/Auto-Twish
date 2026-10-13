@@ -1,4 +1,4 @@
-# Auto Twish — v 1.0.4
+# Auto Twish — v 1.0.5
 
 Extensão para Firefox que automatiza a pesca no **Twish** (jogo de pesca do
 chat da Twitch, via `TwishGameBot`): envia `$pescar` no chat do canal no
@@ -128,6 +128,14 @@ enviado e o Mercado para; o popup e as configurações mostram um aviso e chega
 uma notificação. A extensão confere de 1 em 1 minuto e retoma sozinha quando
 a verificação sai. Ela só lê esse estado — nunca responde a verificação.
 
+**Alerta da verificação** (configurações gerais, desligado por padrão): quando
+o bot manda "Verificação rápida: resolva em twish.com.br/verificacao…"
+marcando você (ou a trava detecta pela API), a extensão pode abrir
+twish.com.br/verificacao numa janela nova em foco (ou trazer para a frente a
+que já estiver aberta) e tocar um alerta sonoro. O aviso se repete a cada 20 s,
+mais 5 vezes, enquanto a verificação continuar pendente (para assim que você
+resolver). Quem resolve a verificação é sempre você.
+
 ## Trava da Expedição
 
 Durante uma Expedição (30 min no mar), o jogo só deixa pescar no barco (canal)
@@ -166,15 +174,22 @@ liberada pelo jogador.
 - **Pescar antes:** enquanto a sala tiver mais de 1 vaga e o CD da pesca
   acabar com folga (1 min) antes de ela zarpar, espera o próximo `$pescar`
   neste canal e entra logo depois. Com 1 vaga só, ou sem folga, entra na hora.
+- **Embarque imediato** (opcional): entra na hora, sem esperar pescar antes.
 - **Mares:** cada um pode ser marcado ou não. Sem a entrada no inventário do
   barco, só entra se "comprar o ticket se não tiver" estiver ligado para aquele
-  mar (`$comprar`). A Fenda do Fim pede 3 Fragmentos do Fim, que não se
+  mar (`$comprar`). Antes de comprar, confere o porto e o inventário do barco:
+  se o ticket já estiver lá, não compra. A Fenda do Fim pede 3 Fragmentos do Fim, que não se
   compram.
 - Não entra em sala aberta por você mesmo, nem com outra sala em andamento,
   vara fraca, torneio ou duelo (o site recusa; o motivo aparece no popup).
 - **Seguro** (Sereias e Abismo, opcional por mar): depois de entrar, compra o
   seguro (`$comprar seguro_<mar>`) se não tiver no inventário do barco; ele é
   gasto sozinho ao zarpar e o mar não leva moedas nem peixe naquela viagem.
+- **Frota do Capitão** (opcional): quando o bot anuncia "@streamer lançou a
+  Frota do Capitão! Digite $embarcar nos próximos 10m0s…", envia `$embarcar`
+  no canal (mesma regra de pescar antes, ou na hora com embarque imediato).
+  Precisa de 20 pescas naquele barco; não embarca se você já estiver numa
+  expedição.
 - Geral + exceção por canal. O popup mostra "⛵ Embarque" com o andamento.
 
 ## Remédios automáticos (desligado por padrão)
@@ -274,13 +289,18 @@ Twitch precisa estar aberta.
 - **Eventos — isca e reforços** (XP em Dobro, Maré Turbo, Sorte Rara, cada
   um com sua configuração): equipa a isca escolhida (`$isca`) enquanto o evento
   durar e mantém o Turbo de Pesca e/ou a Afiação de Anzol ativos (renova quando
-  acabam). Sem o item, compra (`$comprar`) se permitido. Ativar item é feito
+  acabam). Sem o item, compra (`$comprar`) se permitido — só com saldo
+  suficiente e sem passar da Reserva de moedas da Lista de Compras (vale também
+  para as compras do torneio). Ativar item é feito
   pela API do site (`/me/use/{item}`, sem comando de chat — liberado pelo
   jogador). No fim, volta a isca de antes.
   A **Sorte Rara** tem uma regra para cada raridade sorteada (Incomum, Raro,
   Lendário, Mítico, Secreto, Divino), cada uma com sua isca, Turbo e Afiação;
   vale a regra da raridade do evento (se vier mais de uma, a mais rara com
-  regra ligada). Raridade sem regra: nada é feito. Configurações antigas da
+  regra ligada). Raridade sem regra: nada é feito. Cada raridade pode
+  **comprar a isca se não tiver** (quantidade escolhida, ou o que couber acima
+  da reserva); se acabar no meio do evento, compra de novo (no máximo 1 vez a
+  cada 30 s). Configurações antigas da
   Sorte Rara viram a mesma regra em todas as raridades.
 - **Torneio** (lido em `/api/{canal}/tournament`, a cada 30 s e quando o bot
   fala de torneio com `$entrar`): entrada automática com regra "pescar antes"
@@ -334,7 +354,7 @@ Cada versão nova precisa ser assinada de novo e ter número maior.
 
 1. Abra `about:debugging#/runtime/this-firefox`.
 2. Clique em **"Carregar extensão temporária"** e selecione o próprio arquivo
-   `.zip` da versão (ex: `Auto Twish v 1.0.4 [dd-mm-aa] [hh-mm].zip`) — o
+   `.zip` da versão (ex: `Auto Twish v 1.0.5 [dd-mm-aa] [hh-mm].zip`) — o
    `manifest.json` fica na raiz do zip, então não precisa descompactar. Se
    preferir, descompacte e selecione o `manifest.json` da pasta.
 3. A extensão fica ativa até você fechar o Firefox (extensão temporária). Para
@@ -404,6 +424,13 @@ o código pronto caso um dia se queira rodar em Chromium.
   ajuda a evitar isso.
 
 ## Histórico de versões
+
+- **v 1.0.5** — Compras dos eventos e do torneio conferem preço, saldo e a
+  Reserva de moedas antes do `$comprar`; Sorte Rara com compra automática da
+  isca; embarque imediato; ticket conferido no inventário antes de comprar;
+  Frota do Capitão (`$embarcar`); alerta da verificação (janela nova em foco e
+  som, repetindo a cada 20 s, mais 5 vezes). No Chrome, o som usa um documento
+  offscreen (permissão `offscreen`).
 
 - **v 1.0.4** — Backup das configurações (exportar/importar), página de
   estatísticas e atividades (com registro das últimas 300 ações), botão
