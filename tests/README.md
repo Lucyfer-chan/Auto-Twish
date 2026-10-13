@@ -15,7 +15,7 @@ node tests/unit_sorte_rara.js
 python3 tools/build_chrome.py
 node tests/e2e.js dist/chrome
 PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS=1 node tests/expedicao.js dist/chrome
-#  (idem: invdump_sorte, embarque, protecao, aprimoramento, cd_duelo, novidades_1_0_4, novidades_1_0_5)
+#  (idem: invdump_sorte, embarque, protecao, aprimoramento, cd_duelo, novidades_1_0_4, novidades_1_0_5, novidades_1_0_7)
 
 # lint do Firefox
 npx web-ext lint -s src

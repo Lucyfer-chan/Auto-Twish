@@ -259,7 +259,38 @@ async function getGeneralSettings() {
   return structuredClone(state.general);
 }
 
-function computeJitterMs(settings) {
+// Sem atraso aleatorio (o $pescar sai assim que o CD acaba) enquanto durar o
+// XP em Dobro no canal ou houver Turbo ativo (Turbo de Pesca/Torneio, ativado
+// pela extensao ou por voce). xpNoDelayUntil: canal -> fim do XP em Dobro.
+const xpNoDelayUntil = new Map();
+function noDelayActive(channel) {
+  if (!channel) return false;
+  const now = Date.now();
+  if ((xpNoDelayUntil.get(channel) || 0) > now) return true;
+  const b = boostUntil.get(channel);
+  return !!(b && b.until > now);
+}
+// Comecou o XP em Dobro ou um Turbo: tira o atraso do envio ja agendado.
+async function dropDelayNow(channel) {
+  if (!noDelayActive(channel)) return;
+  const next = await mutateChannels((channels) => {
+    const s = channels[channel];
+    if (!s || !s.enabled || s.awaitingUser || !s.nextFireAt) return null;
+    const fresh = s.twishAvailableAt !== null && s.twishLastSeen && Date.now() - s.twishLastSeen < TWISH_DATA_FRESH_MS;
+    if (!fresh) return null;
+    const target = Math.max(Date.now(), s.twishAvailableAt);
+    if (s.nextFireAt <= target + 1500) return null;
+    s.nextFireAt = target;
+    return target;
+  });
+  if (next) {
+    console.log(`${AT.LOG_PREFIX} "${channel}": sem atraso no $pescar (XP em Dobro/Turbo).`);
+    await scheduleDueAlarm(channel, next);
+  }
+}
+
+function computeJitterMs(settings, channel) {
+  if (noDelayActive(channel)) return 0;
   // Atraso do canal (excecao) ou o padrao geral.
   const maxJitterSeconds = AT.effectiveJitterSeconds(settings, stateCache && stateCache.general);
   return Math.floor(Math.random() * (maxJitterSeconds * 1000 + 1));
@@ -286,7 +317,7 @@ function computeDelayMs(settings, channel) {
   let baseMs = baseMinutes * 60 * 1000 * cooldownMultiplierFor(channel);
   const boost = boostUntil.get(channel);
   if (boost && boost.until > Date.now()) baseMs = Math.min(baseMs, boost.cdMs);
-  return baseMs + computeJitterMs(settings);
+  return baseMs + computeJitterMs(settings, channel);
 }
 
 // O heartbeat (rede de seguranca, 1x por minuto) so existe enquanto houver
@@ -446,10 +477,24 @@ async function twishApi(path, { method = "GET", body } = {}) {
   return direct || { ok: false, status: 0, data: null, via: null };
 }
 
+// Turbo de Pesca ativo (active.boost_remaining, em s) visto na conta.
+function noteBoostFromMe(channel, d) {
+  const left = Number(d && d.active && d.active.boost_remaining) || 0;
+  const cur = boostUntil.get(channel);
+  if (left <= 0) {
+    if (cur && cur.cdMs === 20 * 1000) boostUntil.delete(channel);
+    return;
+  }
+  const isNew = !(cur && cur.until > Date.now());
+  if (!cur || cur.cdMs === 20 * 1000 || cur.until < Date.now()) boostUntil.set(channel, { until: Date.now() + left * 1000, cdMs: 20 * 1000 });
+  if (isNew) dropDelayNow(channel).catch(() => {});
+}
+
 async function fetchTwishMe(channel) {
   const r = await twishApi(`/api/${encodeURIComponent(channel)}/me`);
   const ok = r.ok && isValidMe(r.data);
   if (ok) recordStats(channel, r.data);
+  if (ok) noteBoostFromMe(channel, r.data);
   return ok ? { data: r.data, via: r.via } : null;
 }
 
@@ -733,12 +778,12 @@ async function recordTwishCooldown(channel, availableAt, explicit = false) {
     // depois de um envio que o TwishGameBot nao respondeu, ou agendamento
     // feito antes da aba do Twish ser aberta).
     const latestAcceptable =
-      Math.max(now, availableAt) + AT.effectiveJitterSeconds(settings, stateCache && stateCache.general) * 1000 + 2000;
+      Math.max(now, availableAt) + (noDelayActive(channel) ? 0 : AT.effectiveJitterSeconds(settings, stateCache && stateCache.general) * 1000) + 2000;
     const scheduleIsWrong = !settings.nextFireAt || settings.nextFireAt > latestAcceptable;
     if (isSameCooldown && !scheduleIsWrong) return null;
 
     settings.awaitingUser = false; // cooldown novo = o jogador pescou (semi) ou o envio pegou
-    settings.nextFireAt = Math.max(now, availableAt) + computeJitterMs(settings);
+    settings.nextFireAt = Math.max(now, availableAt) + computeJitterMs(settings, channel);
     return settings.nextFireAt;
   });
 
@@ -1023,7 +1068,7 @@ async function applyChannelSettings(channel, patch) {
         // disfarcar o ritmo dos envios recorrentes, nao o primeiro).
         s.nextFireAt = now;
       } else if (twishFresh) {
-        s.nextFireAt = Math.max(now, s.twishAvailableAt) + computeJitterMs(s);
+        s.nextFireAt = Math.max(now, s.twishAvailableAt) + computeJitterMs(s, channel);
       } else {
         s.nextFireAt = now + computeDelayMs(s, channel);
       }
@@ -1295,6 +1340,12 @@ async function refreshEvents(channel, notify) {
   const turbo = ev.event && ev.event.kind === "cooldown_multiplier" ? ev.event : null;
   if (turbo) cooldownMultipliers.set(channel, { value: Number(turbo.value), until: Date.now() + turbo.seconds_remaining * 1000 });
   else cooldownMultipliers.delete(channel);
+  const xp = ev.event && ev.event.kind === "double_xp" ? ev.event : null;
+  if (xp) {
+    const had = (xpNoDelayUntil.get(channel) || 0) > Date.now();
+    xpNoDelayUntil.set(channel, Date.now() + Number(xp.seconds_remaining) * 1000);
+    if (!had) dropDelayNow(channel).catch(() => {});
+  } else xpNoDelayUntil.delete(channel);
   const started = await mutateGameState(channel, (st) => {
     const oldKeys = eventKeys(st.events);
     // 1a vez com o registro de avisos: o que ja era conhecido conta como avisado.
@@ -1886,7 +1937,7 @@ async function rescheduleAfterSafety() {
     for (const [name, s] of Object.entries(channels)) {
       if (!s || !s.enabled || s.awaitingUser) continue;
       if (!s.nextFireAt || s.nextFireAt < Date.now()) {
-        s.nextFireAt = Date.now() + 3000 + computeJitterMs(s);
+        s.nextFireAt = Date.now() + 3000 + computeJitterMs(s, name);
         out.push([name, s.nextFireAt]);
       }
     }
@@ -1902,7 +1953,7 @@ async function rescheduleTo(channel, availableAt) {
     if (!s || !s.enabled) return null;
     s.twishAvailableAt = availableAt;
     s.twishLastSeen = Date.now();
-    s.nextFireAt = Math.max(Date.now(), availableAt) + computeJitterMs(s);
+    s.nextFireAt = Math.max(Date.now(), availableAt) + computeJitterMs(s, channel);
     return s.nextFireAt;
   });
   if (next) await scheduleDueAlarm(channel, next);
@@ -2057,7 +2108,7 @@ async function postponeForExpedition(channel, st) {
   const next = await mutateChannels((channels) => {
     const s = channels[channel];
     if (!s || !s.enabled) return null;
-    s.nextFireAt = Math.max(st.endsAt, Date.now() + EXPEDITION_OVERTIME_MS) + computeJitterMs(s);
+    s.nextFireAt = Math.max(st.endsAt, Date.now() + EXPEDITION_OVERTIME_MS) + computeJitterMs(s, channel);
     return s.nextFireAt;
   });
   if (next) await scheduleDueAlarm(channel, next);
@@ -2125,6 +2176,13 @@ async function restoreCooldownMultipliers() {
     const until = (st.events.fetchedAt || 0) + ev.seconds_remaining * 1000;
     if (until > Date.now()) cooldownMultipliers.set(channel, { value: Number(ev.value), until });
   }
+  // XP em Dobro ainda ativo (sem atraso no $pescar).
+  for (const [channel, st] of Object.entries(gameState || {})) {
+    const ev = st && st.events && st.events.event;
+    if (!ev || ev.kind !== "double_xp") continue;
+    const until = (st.events.fetchedAt || 0) + ev.seconds_remaining * 1000;
+    if (until > Date.now()) xpNoDelayUntil.set(channel, until);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2172,6 +2230,54 @@ browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === UPDATE_ALARM_NAME) checkForUpdate("alarme");
 });
 
+// ---------------------------------------------------------------------------
+// Leitor do chat (content.js) nas abas da Twitch
+//
+// O Chrome NAO injeta os content scripts nas abas que ja estavam abertas
+// quando a extensao e instalada, atualizada ou recarregada (o Firefox injeta).
+// No Chrome o envio do $pescar nao depende do content.js (vai pelo mundo da
+// pagina), entao a pesca continuava, mas a leitura do chat (duelo, destaque,
+// expedicao, verificacao...) ficava desligada ate recarregar a aba.
+// Aqui: pergunta a cada aba da Twitch se o content.js responde; se nao,
+// injeta. Se a injecao falhar, recarrega a aba (so ao instalar/atualizar).
+// ---------------------------------------------------------------------------
+const CONTENT_FILES = ["browser-polyfill.js", "shared.js", "content.js"];
+const CONTENT_CHECK_ALARM = "auto-twish-content-check";
+
+async function ensureChatReaders(reason, { reloadOnFail = false } = {}) {
+  const tabs = await browser.tabs.query({ url: "*://*.twitch.tv/*" }).catch(() => []);
+  let injected = 0;
+  for (const tab of tabs) {
+    if (tab.id === undefined || tab.discarded || tab.status === "loading") continue;
+    const alive = await browser.tabs
+      .sendMessage(tab.id, { type: "AT_PING" })
+      .then((r) => !!(r && r.ok))
+      .catch(() => false);
+    if (alive) continue;
+    let ok = false;
+    try {
+      await browser.scripting.executeScript({ target: { tabId: tab.id }, files: CONTENT_FILES });
+      // Confere de novo: uma copia antiga (orfa) no mesmo contexto faz a injecao falhar sem erro.
+      ok = await browser.tabs
+        .sendMessage(tab.id, { type: "AT_PING" })
+        .then((r) => !!(r && r.ok))
+        .catch(() => false);
+    } catch (e) {
+      console.warn(`${AT.LOG_PREFIX} Não deu para injetar o leitor do chat na aba ${tab.id} (${reason}):`, e);
+    }
+    if (ok) {
+      injected++;
+      console.log(`${AT.LOG_PREFIX} Leitor do chat injetado na aba ${tab.id} (${reason}).`);
+    } else if (reloadOnFail) {
+      console.log(`${AT.LOG_PREFIX} Leitor do chat sem resposta na aba ${tab.id}: recarregando a aba (${reason}).`);
+      logActivity(null, "sistema", "Aba da Twitch recarregada para ligar o leitor do chat.");
+      browser.tabs.reload(tab.id).catch(() => {});
+    }
+  }
+  if (injected) logActivity(null, "sistema", `Leitor do chat ligado em ${injected} aba${injected > 1 ? "s" : ""} da Twitch (${reason}).`);
+  return injected;
+}
+
 async function bootstrap() {
   await readSafetyLock();
   await restoreCooldownMultipliers();
@@ -2181,9 +2287,14 @@ async function bootstrap() {
   await restoreDueAlarms();
   await syncAllTwishTabs();
   setupUpdateCheck().catch(() => {});
+  ensureChatReaders("início", { reloadOnFail: true }).catch(() => {});
+  if (!(await browser.alarms.get(CONTENT_CHECK_ALARM))) await browser.alarms.create(CONTENT_CHECK_ALARM, { periodInMinutes: 1 });
 }
 
 browser.runtime.onInstalled.addListener(bootstrap);
+browser.runtime.onInstalled.addListener(() => {
+  ensureChatReaders("instalação/atualização", { reloadOnFail: true }).catch(() => {});
+});
 if (browser.runtime.onStartup) {
   browser.runtime.onStartup.addListener(bootstrap);
 }
@@ -2432,6 +2543,10 @@ if (browser.notifications && browser.notifications.onClicked) {
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEARTBEAT_NAME) {
     heartbeatTick();
+    return;
+  }
+  if (alarm.name === CONTENT_CHECK_ALARM) {
+    ensureChatReaders("conferência").catch(() => {});
     return;
   }
   if (alarm.name === AT.EVENTS_ALARM_NAME) {

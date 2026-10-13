@@ -227,6 +227,11 @@ document.addEventListener(
 );
 
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // O background confere se o leitor do chat esta ativo nesta aba.
+  if (msg?.type === "AT_PING") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (msg?.type === "SEND_CHAT_MESSAGE" && typeof msg.text === "string") {
     typeAndSend(msg.text, { onlyIfEmpty: !!msg.onlyIfEmpty }).then((result) => sendResponse(result));
     return true; // resposta assincrona

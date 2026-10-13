@@ -151,6 +151,7 @@ async function activateItem(channel, itemId, name, allowBuy, acc) {
   if (itemId === AT.TURBO_ITEM || itemId === AT.TOURNAMENT_TURBO_ITEM) {
     const torneio = itemId === AT.TOURNAMENT_TURBO_ITEM;
     boostUntil.set(channel, { until: Date.now() + (torneio ? 180 : 300) * 1000, cdMs: (torneio ? 10 : 20) * 1000 });
+    dropDelayNow(channel).catch(() => {}); // Turbo ativo: $pescar sem atraso
     const s = (await getAllChannelSettings())[channel];
     if (s && s.enabled) schedulePostSendCheck(channel, 3000); // CD muda: confere a conta
   }
