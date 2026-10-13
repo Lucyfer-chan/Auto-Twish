@@ -441,7 +441,7 @@ function mountKitEditor(host, save) {
   // withBaitBuy: mostra "comprar a isca se não tiver" (Sorte Rara).
   function entryFields(send, baitLabel, withBaitBuy) {
     const bait = baitSelect();
-    const baitBuy = checkRow("comprar a isca se não tiver", "compra pelo chat ($comprar) a quantidade abaixo e equipa; se acabar durante o evento, compra de novo");
+    const baitBuy = checkRow("comprar a isca se não tiver", "compra pelo chat ($comprar) a quantidade abaixo e equipa; se acabar durante o evento, compra de novo (no máximo uma vez a cada 30 s)");
     const baitQty = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", style: "width:80px" });
     const baitBuyBox = h("div", { class: "kit-sub" }, baitBuy.row, h("div", { class: "acq-field", style: "max-width:200px;margin-left:26px" }, h("label", { text: "Quantidade por compra" }), baitQty));
     if (!withBaitBuy) baitBuyBox.hidden = true;

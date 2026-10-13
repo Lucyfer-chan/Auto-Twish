@@ -152,7 +152,16 @@ const out = [];
   await sw.evaluate(() => checkChallenge('teste'));
   await sleep(2000);
   out.push(`  trava pela API (sem mensagem no chat) -> abas da verificação: ${await vtabs()} | ${JSON.stringify(await sw.evaluate(async () => (await browser.storage.local.get('safety')).safety.locked))}`);
-  CHALLENGE = { state: 'none' }; await sw.evaluate(() => checkChallenge('teste'));
+  // repeticao: a cada 20 s, mais 5 vezes (aqui chamada direto, sem esperar)
+  await sw.evaluate(() => { self.__notes = []; const orig = browser.notifications.create.bind(browser.notifications); browser.notifications.create = async (id, o) => { self.__notes.push(o.title); return orig(id, o); }; });
+  const alarm = await sw.evaluate(async () => { const a = await browser.alarms.get(VERIFY_REPEAT_ALARM); return a ? Math.round((a.scheduledTime - Date.now()) / 1000) : null; });
+  for (let i = 0; i < 7; i++) await sw.evaluate(() => repeatVerificationAlert());
+  out.push(`  repetição: próximo aviso em ~${alarm}s | 7 chamadas, ainda pendente -> notificações: ${JSON.stringify(await sw.evaluate(() => self.__notes))}`);
+  await sw.evaluate(async () => { const v = (await browser.storage.local.get('verifyAlert')).verifyAlert; await browser.storage.local.set({ verifyAlert: { ...v, repeatsLeft: 5 } }); self.__notes = []; });
+  CHALLENGE = { state: 'none' };
+  await sw.evaluate(() => repeatVerificationAlert());
+  out.push(`  verificação resolvida no meio -> notificações de repetição: ${JSON.stringify(await sw.evaluate(() => self.__notes.filter((t) => /pendente/.test(t))))} | trava: ${await sw.evaluate(async () => (await browser.storage.local.get('safety')).safety.locked)} | restam: ${await sw.evaluate(async () => (await browser.storage.local.get('verifyAlert')).verifyAlert.repeatsLeft)}`);
+  await sw.evaluate(() => checkChallenge('teste'));
 
   // 5) Opcoes
   const opt = await ctx.newPage(); opt.on('pageerror', (e) => errors.push('options: ' + e.message));

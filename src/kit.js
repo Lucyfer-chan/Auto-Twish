@@ -6,7 +6,8 @@
 // inventario e a compra automatica estiver ligada, compra ($comprar) e ativa.
 // No fim, volta a isca que estava antes (ou desequipa).
 // Isca: sem ela no inventario e com "comprar se nao tiver", compra a
-// quantidade escolhida ($comprar <isca> <qtd>) e equipa.
+// quantidade escolhida ($comprar <isca> <qtd>) e equipa. Confere a cada 30 s se
+// a isca acabou; a mesma isca nao e comprada de novo antes de 30 s.
 //
 // Toda compra daqui (eventos e torneio) confere o preco na loja e o saldo
 // antes de enviar o $comprar, e nunca deixa o saldo abaixo da Reserva de
@@ -35,7 +36,7 @@ const KIT_MIN_EVENT_LEFT_MS = 30 * 1000; // nao ativa reforco com o evento acaba
 const DUEL_BAIT_MAX_MS = 15 * 60 * 1000; // se o fim do duelo nao for visto, solta a isca depois disso
 const BAIT_PRIORITY = ["tournament", "duel", "event"];
 const kitBusy = new Set();
-const BAIT_REBUY_GAP_MS = 2 * 60 * 1000; // nao compra a mesma isca de novo antes disso
+const BAIT_REBUY_GAP_MS = 30 * 1000; // nao compra a mesma isca de novo antes disso
 const baitBoughtAt = new Map(); // "canal:isca" -> quando comprou
 
 async function kitConfigs(channel) {
@@ -307,8 +308,8 @@ async function runKitCheck(channel, source) {
         if (entry.sharpen && acc.sharpenRemaining > 0) next = Math.min(next, acc.sharpenRemaining * 1000 + 2000);
         if (acc.boostRemaining > 0) boostUntil.set(channel, { until: Date.now() + acc.boostRemaining * 1000, cdMs: 20 * 1000 });
       }
-      // Com compra de isca: confere a cada 2 min se a isca acabou no meio do evento.
-      if (entry && entry.enabled && entry.baitId && entry.baitBuy && left > 2 * 60000) next = Math.min(next, 2 * 60000);
+      // Com compra de isca: confere a cada 30 s se a isca acabou no meio do evento.
+      if (entry && entry.enabled && entry.baitId && entry.baitBuy && left > BAIT_REBUY_GAP_MS) next = Math.min(next, BAIT_REBUY_GAP_MS);
       next = Math.min(next, left + 3000);
     }
     if (st.ctx.duel && st.ctx.duel.until) next = Math.min(next, st.ctx.duel.until - Date.now() + 1000);

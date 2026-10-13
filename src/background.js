@@ -1786,10 +1786,15 @@ async function checkChallenge(source) {
 }
 
 // Alerta da verificacao: abre twish.com.br/verificacao numa janela nova em
-// foco e/ou toca um som (opcoes gerais; desligadas por padrao). Uma vez a
+// foco e/ou toca um som (opcoes gerais; desligadas por padrao). Depois do
+// primeiro, repete o aviso (som, notificacao e janela na frente) a cada 20 s,
+// mais 5 vezes, enquanto a verificacao continuar pendente. Uma sequencia a
 // cada 3 min. So avisa — a verificacao e sempre resolvida pelo jogador.
 const VERIFY_URL = "https://twish.com.br/verificacao";
 const VERIFY_ALERT_GAP_MS = 3 * 60 * 1000;
+const VERIFY_REPEAT_ALARM = "auto-twish-verify-repeat";
+const VERIFY_REPEAT_MS = 20 * 1000;
+const VERIFY_REPEAT_TIMES = 5;
 let lastVerifyAlertAt = 0;
 
 async function alertVerification(source) {
@@ -1803,7 +1808,38 @@ async function alertVerification(source) {
   logActivity(null, "trava", `Verificação pedida (${source}): ${[cfg.openWindow && "janela aberta", cfg.sound && "alerta sonoro"].filter(Boolean).join(" e ")}.`);
   if (cfg.sound) playAlertSound().catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao tocar o alerta:`, e));
   if (cfg.openWindow) await openVerificationWindow();
+  await browser.storage.local.set({ verifyAlert: { at: lastVerifyAlertAt, source, repeatsLeft: VERIFY_REPEAT_TIMES } });
+  await browser.alarms.create(VERIFY_REPEAT_ALARM, { when: Date.now() + VERIFY_REPEAT_MS });
 }
+
+// Repeticao do alerta (a cada 20 s). Para quando a verificacao deixa de estar pendente.
+async function repeatVerificationAlert() {
+  const { verifyAlert } = await browser.storage.local.get("verifyAlert");
+  const left = Number(verifyAlert && verifyAlert.repeatsLeft) || 0;
+  if (left <= 0) return;
+  const r = await twishApi("/api/me/challenge");
+  if (r.ok && r.data && r.data.state !== "pending") {
+    await browser.storage.local.set({ verifyAlert: { ...verifyAlert, repeatsLeft: 0 } });
+    if (safetyLocked) await checkChallenge("alerta");
+    return;
+  }
+  const cfg = AT.sanitizeVerifyAlert((await getGeneralSettings()).verifyAlert);
+  const n = VERIFY_REPEAT_TIMES - left + 1;
+  await browser.storage.local.set({ verifyAlert: { ...verifyAlert, repeatsLeft: left - 1 } });
+  if (cfg.sound) playAlertSound().catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao tocar o alerta:`, e));
+  if (cfg.openWindow) await openVerificationWindow().catch(() => {});
+  try {
+    await browser.notifications.create("verify-repeat", {
+      type: "basic",
+      title: `Auto Twish — verificação pendente (aviso ${n + 1} de ${VERIFY_REPEAT_TIMES + 1})`,
+      message: "Resolva em twish.com.br/verificacao para continuar pescando."
+    });
+  } catch (e) {}
+  if (left - 1 > 0) await browser.alarms.create(VERIFY_REPEAT_ALARM, { when: Date.now() + VERIFY_REPEAT_MS });
+}
+browser.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === VERIFY_REPEAT_ALARM) repeatVerificationAlert().catch((e) => console.warn(`${AT.LOG_PREFIX} Falha ao repetir o alerta:`, e));
+});
 
 async function openVerificationWindow() {
   // Ja aberta? Traz para a frente em vez de abrir outra.
